@@ -33,5 +33,16 @@
     "device": "iPhone",
     "data": {},
     "details": ""
+  },
+  {
+    "id": 4,
+    "timestamp": "2026-07-20 10:07:38",
+    "ip": "192.168.31.16",
+    "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36",
+    "result": 1000,
+    "ios_version": "",
+    "device": "Win32",
+    "data": {},
+    "details": ""
   }
 ]
