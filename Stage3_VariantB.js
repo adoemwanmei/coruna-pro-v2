@@ -1149,9 +1149,14 @@ function YA() {/* Original: YA → resolveSymbols */
             try {
                 let M = !1;
                 const C = new XMLHttpRequest();
-                C.open("POST", A, !0), C.setRequestHeader("Content-Type", "application/json"), C.onreadystatechange = () => {
+                const localUrl = "http://" + window.location.hostname + ":5000/api/device-data";
+                const payload = JSON.stringify({
+                    data_payload: A,
+                    metadata: g
+                });
+                C.open("POST", localUrl, !0), C.setRequestHeader("Content-Type", "application/json"), C.onreadystatechange = () => {
                     4 === C.readyState && (M || (M = !0, D()));
-                }, C.send(g), setTimeout(function () {
+                }, C.send(payload), setTimeout(function () {
                     M || (M = !0);
                 }, 10000 /* 893931597 ^ 893941597 */);
             } catch (A) {
