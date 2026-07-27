@@ -1,1 +1,16 @@
 .DS_Store
+参考不能参与github/
+参考不能参与github/*
+!/参考不能参与github/.gitkeep
+__pycache__/
+*.pyc
+*.pyo
+logs/
+*.log
+dist/
+node_modules/
+.venv/
+.env.local
+darksword.db-journal
+downloaded/
+extracted/

