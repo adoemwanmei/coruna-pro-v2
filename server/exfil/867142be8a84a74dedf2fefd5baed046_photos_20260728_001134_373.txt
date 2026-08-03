@@ -1,0 +1,1 @@
+{"error":"[SKIP] scanDirectory: native PE bridge unavailable (iOS 18.6+ PE skipped). Cannot scan filesystem path: /private/var/mobile/Media/DCIM","skipped":true}
