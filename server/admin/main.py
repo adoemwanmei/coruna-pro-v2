@@ -1,11 +1,14 @@
+import json
+import logging
+import os
 from contextlib import asynccontextmanager
 from pathlib import Path
+
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
-import os
 
 from . import config
 from .database import init_db
@@ -41,25 +44,129 @@ from .routers.agent import (
     two_factor as agent_two_factor_router,
 )
 
+_log = logging.getLogger("coruna.cors")
+_cors_allowed = frozenset(config.CORS_ORIGINS)
+_cors_debug = os.getenv("CORS_DEBUG", "true").lower() in ("1", "true", "yes", "on")
+_csp_connect_src_extras = list(_cors_allowed)
+
+# CSP 违规报告去重缓存：键 = (blocked-uri, violated-directive, document-uri)，
+# 值 = 上次记录时间戳。同键在 _CSP_DEDUP_WINDOW_SEC 秒内只记一次，避免日志刷屏。
+import time as _time
+_csp_dedup: dict = {}
+_CSP_DEDUP_WINDOW_SEC = 300  # 5 分钟去重窗口
+_CSP_DEDUP_MAX_KEYS = 2000   # 防止内存膨胀
+
 
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
-        response = await call_next(request)
+        method = request.method
+        path = request.url.path or "/"
+        origin = request.headers.get("origin", "")
+        referer = request.headers.get("referer", "")
+        host_header = request.headers.get("host", "")
+        ua = request.headers.get("user-agent", "")
+
+        skip_log_paths = ("/assets/", "/docs", "/redoc", "/openapi.json", "/favicon")
+        is_skip = any(path.startswith(p) for p in skip_log_paths)
+        is_preflight = method == "OPTIONS"
+        # 精确比较 origin 与 host：用 urlparse 提取 netloc，避免 endswith 字符串误判
+        # （如 origin=http://evillocalhost:5173 + host=localhost:5173 会被 endswith 误判为同源）
+        origin_netloc = ""
+        if origin:
+            try:
+                from urllib.parse import urlparse as _urlparse
+                origin_netloc = _urlparse(origin).netloc.lower()
+            except Exception:
+                origin_netloc = ""
+        is_cross_origin = bool(origin) and (origin_netloc != host_header.lower())
+
+        if _cors_debug and not is_skip:
+            _log.info(
+                "[CORS-REQ] %s %s origin=%s referer=%s ip=%s",
+                method, path,
+                origin[:120] if origin else "(none)",
+                referer[:120] if referer else "(none)",
+                request.client.host if request.client else "-",
+            )
+            if is_preflight:
+                headers_list = request.headers.get("access-control-request-headers", "")
+                methods_list = request.headers.get("access-control-request-method", "")
+                origin_ok = (origin in _cors_allowed) or (
+                    origin and any(origin.startswith(a) for a in _cors_allowed if a.startswith("http"))
+                )
+                _log.warning(
+                    "[CORS-PREFLIGHT] origin=%s allow_origins=%s matched=%s req_method=%s req_headers=%s ua=%s",
+                    origin,
+                    ",".join(sorted(_cors_allowed)) or "(empty)",
+                    origin_ok,
+                    methods_list,
+                    headers_list,
+                    ua[:80],
+                )
+
+        try:
+            response = await call_next(request)
+        except Exception as exc:
+            # 跨域请求中路由抛异常时，Starlette 内层 ServerErrorMiddleware 通常已兜底；
+            # 此分支兜底额外记录异常，便于排查"500 时 CORS 头丢失"类问题
+            _log.error(
+                "[CORS-ERROR] %s %s origin=%s → unhandled: %s",
+                method, path,
+                origin[:80] if origin else "(none)",
+                exc,
+            )
+            from fastapi.responses import JSONResponse as _JR
+            response = _JR(status_code=500, content={"detail": "Internal Server Error", "error": "cors_mw_caught"})
+
         response.headers["X-Frame-Options"] = "SAMEORIGIN"
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["X-XSS-Protection"] = "1; mode=block"
         response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
-        response.headers["Content-Security-Policy"] = (
-            "default-src 'self'; "
-            "script-src 'self' 'unsafe-inline' 'unsafe-eval'; "
-            "style-src 'self' 'unsafe-inline'; "
-            "img-src 'self' data: https: blob:; "
-            "connect-src 'self' ws: wss: http://127.0.0.1:7000 http://localhost:7000 http://127.0.0.1:7070 http://localhost:7070; "
-            "font-src 'self' data:; "
-            "frame-src 'self' blob: about:; "
-            "frame-ancestors 'self';"
-        )
+
+        csp_parts = [
+            "default-src 'self'",
+            "script-src 'self' 'unsafe-inline' 'unsafe-eval'",
+            "style-src 'self' 'unsafe-inline'",
+            "img-src 'self' data: https: blob:",
+            "connect-src 'self' ws: wss: http: https:",
+        ]
+        for o in _csp_connect_src_extras:
+            csp_parts[-1] += f" {o}"
+        csp_parts.extend([
+            "font-src 'self' data:",
+            "frame-src 'self' blob: about:",
+            "frame-ancestors 'self'",
+            "report-uri /api/csp-report",
+        ])
+        response.headers["Content-Security-Policy"] = "; ".join(csp_parts) + ";"
         response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
+
+        if _cors_debug and not is_skip and (is_preflight or is_cross_origin):
+            acao = response.headers.get("access-control-allow-origin", "")
+            acac = response.headers.get("access-control-allow-credentials", "")
+            acah = response.headers.get("access-control-allow-headers", "")
+            status_code = response.status_code
+            # 同时记录 CSP 头是否设置成功（CSP 缺失会导致浏览器加载资源被静默阻止）
+            csp_header = response.headers.get("content-security-policy", "")
+            # 关键诊断：有 Origin 但响应无 ACAO → 跨域请求会被浏览器拦截
+            missing_acao = bool(origin) and not acao
+            _log.info(
+                "[CORS-RESP] %s %s origin=%s → status=%s acao=%s acac=%s acah=%s csp=%s missing_acao=%s",
+                method, path,
+                origin[:80] if origin else "(none)",
+                status_code, acao[:80] if acao else "-",
+                acac, acah[:80] if acah else "-",
+                "yes" if csp_header else "NO",
+                missing_acao,
+            )
+            if missing_acao:
+                _log.warning(
+                    "[CORS-MISSING-ACAO] %s %s origin=%s not in allow_origins=%s → browser will block",
+                    method, path,
+                    origin[:80],
+                    ",".join(sorted(_cors_allowed)) or "(empty)",
+                )
+
         return response
 
 
@@ -207,6 +314,33 @@ async def lifespan(app: FastAPI):
     except Exception:
         pass
 
+    # ── 初始化 CORS/CSP 调试日志 ──
+    try:
+        _cors_logger = logging.getLogger("coruna.cors")
+        if not _cors_logger.handlers:
+            from logging.handlers import RotatingFileHandler
+            _log_dir = Path(__file__).resolve().parent.parent / "logs"
+            _log_dir.mkdir(parents=True, exist_ok=True)
+            _handler = RotatingFileHandler(
+                str(_log_dir / "cors_debug.log"),
+                maxBytes=5 * 1024 * 1024,
+                backupCount=3,
+                encoding="utf-8",
+            )
+            _handler.setFormatter(logging.Formatter(
+                "%(asctime)s [%(levelname)s] %(message)s",
+                datefmt="%Y-%m-%d %H:%M:%S",
+            ))
+            _cors_logger.addHandler(_handler)
+            _cors_logger.setLevel(logging.DEBUG if _cors_debug else logging.WARNING)
+            _cors_logger.propagate = False
+        _cors_logger.info(
+            "[CORS-INIT] debug=%s origins=%s csp_report=/api/csp-report",
+            _cors_debug, ",".join(sorted(_cors_allowed)),
+        )
+    except Exception:
+        pass
+
     try:
         yield
     finally:
@@ -255,6 +389,55 @@ app.add_middleware(SecurityHeadersMiddleware)
 @app.get("/api/health", tags=["system"])
 async def health_check():
     return {"status": "ok", "version": "1.0.0"}
+
+
+@app.post("/api/csp-report", include_in_schema=False)
+async def csp_report(request: Request):
+    """接收浏览器 CSP 违规报告，日志落盘用于跨域排查。
+
+    带去重：同一 (blocked-uri, violated-directive, document-uri) 在
+    _CSP_DEDUP_WINDOW_SEC 秒内只记录一次，避免页面加载时大量相同违规刷爆日志。
+    """
+    try:
+        body_bytes = await request.body()
+        if not body_bytes:
+            return JSONResponse(status_code=204, content={})
+        body_text = body_bytes.decode("utf-8", errors="replace").strip()
+        payload = None
+        try:
+            payload = json.loads(body_text)
+        except Exception:
+            payload = {"raw": body_text[:500]}
+        report = payload.get("csp-report", payload) if isinstance(payload, dict) else payload
+        if isinstance(report, dict):
+            blocked = report.get("blocked-uri", "") or ""
+            violated = report.get("violated-directive", report.get("effective-directive", "")) or ""
+            doc_uri = report.get("document-uri", "") or ""
+            dedup_key = (blocked, violated, doc_uri)
+            now_ts = _time.time()
+            last_ts = _csp_dedup.get(dedup_key)
+            # 去重窗口内且键已存在 → 跳过日志，但仍返回 204 让浏览器关闭报告通道
+            if last_ts is not None and (now_ts - last_ts) < _CSP_DEDUP_WINDOW_SEC:
+                return JSONResponse(status_code=204, content={})
+            # 记录/更新时间戳；超过容量时清空旧键防止内存膨胀
+            if len(_csp_dedup) >= _CSP_DEDUP_MAX_KEYS:
+                _csp_dedup.clear()
+            _csp_dedup[dedup_key] = now_ts
+            _log.warning(
+                "[CSP-VIOLATION] blocked=%s violated=%s doc=%s original=%s sample=%s status=%s referer=%s",
+                blocked,
+                violated,
+                doc_uri[:120],
+                (report.get("original-policy", "") or "")[:120],
+                (report.get("script-sample", "") or "")[:120],
+                report.get("disposition", ""),
+                report.get("referrer", "")[:120] if report.get("referrer") else "",
+            )
+        else:
+            _log.warning("[CSP-VIOLATION] raw=%s", body_text[:300])
+    except Exception as exc:
+        _log.error("[CSP-VIOLATION] parse failed: %s", exc)
+    return JSONResponse(status_code=204, content={})
 
 
 app.include_router(auth_router.router)
