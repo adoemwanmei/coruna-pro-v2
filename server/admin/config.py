@@ -33,7 +33,7 @@ _CORS_STR = os.getenv("CORS_ORIGINS", "")
 if _CORS_STR:
     CORS_ORIGINS = [o.strip() for o in _CORS_STR.split(",") if o.strip()]
 else:
-    CORS_ORIGINS = ["http://localhost:8080", "http://localhost:5173", "http://localhost:3000"]
+    CORS_ORIGINS = ["http://localhost:7070", "http://localhost:5173", "http://localhost:3000"]
 
 RATE_LIMIT = os.getenv("RATE_LIMIT", "100/minute")
 AUTH_RATE_LIMIT = os.getenv("AUTH_RATE_LIMIT", "5/minute")

@@ -14,7 +14,7 @@ export default defineConfig({
     port: 5173,
     proxy: {
       '/api/notifications/stream': {
-        target: 'http://127.0.0.1:8000',
+        target: 'http://127.0.0.1:7000',
         changeOrigin: true,
         ws: false,
         timeout: 0,
@@ -67,7 +67,7 @@ export default defineConfig({
         }
       },
       '/api': {
-        target: 'http://127.0.0.1:8000',
+        target: 'http://127.0.0.1:7000',
         changeOrigin: true,
         ws: true,
         headers: {
@@ -75,47 +75,47 @@ export default defineConfig({
         }
       },
       '/ch/': {
-        target: 'http://127.0.0.1:8080',
+        target: 'http://127.0.0.1:7070',
         changeOrigin: true
       },
       '/if/': {
-        target: 'http://127.0.0.1:8080',
+        target: 'http://127.0.0.1:7070',
         changeOrigin: true
       },
       '/t/': {
-        target: 'http://127.0.0.1:8080',
+        target: 'http://127.0.0.1:7070',
         changeOrigin: true
       },
       '/sdk/': {
-        target: 'http://127.0.0.1:8080',
+        target: 'http://127.0.0.1:7070',
         changeOrigin: true
       },
       '/upload': {
-        target: 'http://127.0.0.1:8080',
+        target: 'http://127.0.0.1:7070',
         changeOrigin: true
       },
       '/group/': {
-        target: 'http://127.0.0.1:8080',
+        target: 'http://127.0.0.1:7070',
         changeOrigin: true
       },
       '/stage': {
-        target: 'http://127.0.0.1:8080',
+        target: 'http://127.0.0.1:7070',
         changeOrigin: true
       },
       '/report': {
-        target: 'http://127.0.0.1:8080',
+        target: 'http://127.0.0.1:7070',
         changeOrigin: true
       },
       '/payloads/': {
-        target: 'http://127.0.0.1:8080',
+        target: 'http://127.0.0.1:7070',
         changeOrigin: true
       },
       '/cmd': {
-        target: 'http://127.0.0.1:8080',
+        target: 'http://127.0.0.1:7070',
         changeOrigin: true
       },
       '/cmd_result': {
-        target: 'http://127.0.0.1:8080',
+        target: 'http://127.0.0.1:7070',
         changeOrigin: true
       }
     }

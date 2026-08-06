@@ -78,7 +78,7 @@ class BasicSettings(BaseModel):
 class C2Settings(BaseModel):
     c2_host: str = ''
     listen_host: str = '0.0.0.0'
-    listen_port: int = 8080
+    listen_port: int = 7070
     redirect_url: str = ''
 
 
@@ -208,7 +208,7 @@ async def get_settings(db: Session = Depends(get_db), current_user=Depends(get_c
         "c2": {
             "c2_host": _get_setting(db, "c2.c2_host", ""),
             "listen_host": _get_setting(db, "c2.listen_host", "0.0.0.0"),
-            "listen_port": int(_get_setting(db, "c2.listen_port", "8080")),
+            "listen_port": int(_get_setting(db, "c2.listen_port", "7070")),
             "redirect_url": _get_setting(db, "c2.redirect_url", "")
         },
         "exploit": {

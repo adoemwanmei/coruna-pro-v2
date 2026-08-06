@@ -606,7 +606,7 @@ async function copyEmbed(row) {
   embedTplId.value = row.default_template_id || null
   if (!publicBaseUrl.value) {
     const origin = window.location.origin.replace(/\/$/, '')
-    publicBaseUrl.value = origin.replace(/:\d+$/, ':8080') || 'http://localhost:8080'
+    publicBaseUrl.value = origin.replace(/:\d+$/, ':7070') || 'http://localhost:7070'
   }
   await genEmbed()
   embedVisible.value = true

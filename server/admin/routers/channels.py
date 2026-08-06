@@ -298,7 +298,7 @@ async def get_embed_code(channel_id: int, mode: str = "iframe", public_base_url:
     c = db.query(TrafficChannel).filter(TrafficChannel.id == int(channel_id)).first()
     if not c:
         raise HTTPException(404, "Channel not found")
-    base = public_base_url or config.DARKSWORD_PUBLIC_BASE or "http://localhost:8080"
+    base = public_base_url or config.DARKSWORD_PUBLIC_BASE or "http://localhost:7070"
     base = base.rstrip("/")
     tpl_part = f"&tpl={urllib.parse.quote(tpl_slug)}" if tpl_slug else ""
     url = f"{base}/ch/{c.slug}?ch={c.slug}{tpl_part}"

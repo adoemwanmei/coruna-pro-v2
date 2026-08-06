@@ -39,7 +39,7 @@ STATE_DIR = LOGS_ARCHIVE_DIR / ".state"  # stamp files for "already-run-today"
 FRONTEND_DIST = PROJECT_ROOT / "frontend" / "dist"
 
 DEFAULT_CORS_FALLBACK = [
-    "http://localhost:8080", "http://localhost:5173", "http://localhost:3000",
+    "http://localhost:7070", "http://localhost:5173", "http://localhost:3000",
 ]
 
 

@@ -54,7 +54,7 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
             "script-src 'self' 'unsafe-inline' 'unsafe-eval'; "
             "style-src 'self' 'unsafe-inline'; "
             "img-src 'self' data: https: blob:; "
-            "connect-src 'self' ws: wss: http://127.0.0.1:8000 http://localhost:8000 http://127.0.0.1:8001 http://localhost:8001 http://127.0.0.1:8080 http://localhost:8080; "
+            "connect-src 'self' ws: wss: http://127.0.0.1:7000 http://localhost:7000 http://127.0.0.1:8001 http://localhost:8001 http://127.0.0.1:7070 http://localhost:7070; "
             "font-src 'self' data:; "
             "frame-src 'self' blob: about:; "
             "frame-ancestors 'self';"
