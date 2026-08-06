@@ -1395,60 +1395,51 @@ Contact the author for latest version adaptation support.
 
 ---
 
-## 📁 Project Structure
+## 📁 Project Structure (Compact)
+
+> Full structure: see "Architecture Overview" above. Only key nodes listed here.
 
 ```
 coruna/
 ├─ server/                          # Backend
 │   ├─ admin/                       # FastAPI app
-│   │   ├─ main.py                  # Entry (with frontend hosting)
-│   │   ├─ auth.py                  # JWT + 2FA
-│   │   ├─ database.py              # SQLAlchemy ORM
-│   │   ├─ schemas.py                # Pydantic models
-│   │   ├─ config_constants.py      # Config constants
-│   │   └─ routers/                 # API routers
-│   │       ├─ devices.py           # Device management
-│   │       ├─ commands.py          # Command management
-│   │       ├─ exfil.py             # Data exfiltration
-│   │       ├─ channels.py          # Channel management
-│   │       ├─ templates.py         # Template management
-│   │       ├─ dashboard.py         # Statistics dashboard
-│   │       ├─ report.py            # Exploit report receiver
-│   │       └─ ...
+│   │   ├─ main.py                  # Entry (frontend hosting / SSE / security headers)
+│   │   ├─ auth.py / agent_auth.py  # Admin + Agent dual-track auth
+│   │   ├─ database.py              # SQLAlchemy ORM + normalize_device_uuid
+│   │   ├─ config.py / config_constants.py  # .env + single source of truth for thresholds
+│   │   └─ routers/
+│   │       ├─ *.py                  # Admin routers (16: devices/commands/exfil/channels/...)
+│   │       └─ agent/               # Agent role router subpackage (8)
 │   ├─ exploit_server.py            # Port 7070 exploit + C2
 │   ├─ platform_module.js           # WebKit PAC bypass + primitives
 │   ├─ utility_module.js            # Utility module
-│   ├─ Stage1_*.js                  # 4 version Stage1 exploits
-│   ├─ Stage3_VariantB.js           # Sandbox escape + payload
+│   ├─ Stage1_*.js                  # 4 version Stage1 WASM exploits
+│   ├─ Stage2_*.js                  # 5 version Stage2 chain builders
+│   ├─ Stage3_VariantA.js / Stage3_VariantB.js   # Sandbox escape dual variants
 │   ├─ group.html                   # Main exploit entry
 │   ├─ payloads/
-│   │   └─ post_exploit.js          # Post-exploitation + C2 polling
-│   ├─ templates/                   # Phishing templates
-│   ├─ exfil/                       # Exfiltrated data (auto-generated)
-│   ├─ logs/                        # Logs (auto-generated)
+│   │   ├─ post_exploit.js          # Post-exploitation + C2 polling
+│   │   ├─ manifest.json            # Encrypted payload manifest
+│   │   ├─ bootstrap.dylib          # Bootstrap dylib
+│   │   └─ <hash>/                  # Module-hash organized encrypted payloads
+│   ├─ templates/                   # Phishing HTML templates
+│   ├─ requirements.txt
 │   ├─ darksword.db                 # SQLite database (auto-generated)
-│   └─ requirements.txt
+│   ├─ logs/ / logs_archive/        # Logs and archives (auto-generated)
+│   └─ exfil/                       # Exfiltrated data drop (runtime-generated)
 │
 ├─ veu/                             # Frontend
 │   ├─ src/
-│   │   ├─ views/                   # Pages
-│   │   │   ├─ Dashboard.vue
-│   │   │   ├─ Devices.vue
-│   │   │   ├─ DeviceDetail.vue     # With exploit progress bar
-│   │   │   ├─ Commands.vue
-│   │   │   ├─ Exfil.vue
-│   │   │   ├─ Channels.vue
-│   │   │   ├─ Templates.vue
-│   │   │   └─ ...
-│   │   ├─ utils/
-│   │   │   ├─ axios.js
-│   │   │   └─ twofa.js
-│   │   └─ router/
-│   ├─ vite.config.js               # Vite config + proxy
+│   │   ├─ views/                   # 25 pages (Dashboard/Devices/DeviceDetail/Commands/Exfil/...)
+│   │   ├─ stores/                  # Pinia
+│   │   ├─ router/                  # Vue Router
+│   │   ├─ utils/axios.js + twofa.js
+│   │   └─ constants/
+│   ├─ vite.config.js               # Vite + proxy + SSE handling
 │   └─ package.json
 │
-├─ Full_Deployment_Tutorial.md
-├─ iOS_Exploit_C2_Flow_10_Steps.md
+├─ 完整部署教程_后端启动+前端启动+打包+宝塔面板.md  (Chinese deployment guide)
+├─ iOS 完整利用 + C2 执行流程（10 步端到端）.md       (Chinese 10-step iOS flow)
 └─ README.md                        # This file
 ```
 
