@@ -1,1 +1,0 @@
-vibrated 500ms [iOS visual fallback: shake+flash+pop+dualbeep]
