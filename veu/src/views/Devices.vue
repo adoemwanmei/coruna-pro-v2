@@ -71,7 +71,7 @@
         </el-col>
         <el-col :xs="12" :sm="12" :md="8" :lg="4">
           <div class="stat-card" style="background:linear-gradient(135deg,#722ed1,#9254de);position:relative;overflow:hidden;">
-            <div class="stat-label">窃取数据</div>
+            <div class="stat-label">已窃取数据</div>
             <div class="stat-value">{{ stats.total_exfil }}</div>
             <el-icon class="stat-icon"><DataLine /></el-icon>
           </div>
