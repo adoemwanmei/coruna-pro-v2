@@ -65,8 +65,8 @@
         </div>
       </div>
 
-      <el-row :gutter="16">
-        <el-col :span="8">
+      <el-row :gutter="16" class="info-row">
+        <el-col :xs="24" :sm="24" :md="8">
           <el-descriptions :column="1" border size="small" title="基础信息">
             <el-descriptions-item label="UUID"><span class="mono">{{ device?.device_uuid || '-' }}</span></el-descriptions-item>
             <el-descriptions-item label="系统">{{ formatOS }}</el-descriptions-item>
@@ -93,7 +93,7 @@
             </el-descriptions-item>
           </el-descriptions>
         </el-col>
-        <el-col :span="8">
+        <el-col :xs="24" :sm="24" :md="8">
           <el-descriptions :column="1" border size="small" title="连接信息">
             <el-descriptions-item label="IP 地址">
               <span class="mono">{{ device?.ip || '-' }}</span>
@@ -143,7 +143,7 @@
             </el-descriptions-item>
           </el-descriptions>
         </el-col>
-        <el-col :span="8">
+        <el-col :xs="24" :sm="24" :md="8">
           <el-descriptions :column="1" border size="small" title="时间信息">
             <el-descriptions-item label="首次上线">{{ formatDate(device?.first_seen) }}</el-descriptions-item>
             <el-descriptions-item label="最近心跳">{{ formatRelative(device?.last_seen) }}</el-descriptions-item>
@@ -262,7 +262,7 @@
             </span>
           </div>
           <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
-            <el-select v-model="logsFilterType" size="small" style="width:130px;" placeholder="全部类型" clearable>
+            <el-select v-model="logsFilterType" size="small" class="logs-type-select" placeholder="全部类型" clearable>
               <el-option label="HTTP 请求" value="http" />
               <el-option label="命令调度" value="command" />
               <el-option label="窃取上报" value="exfil" />
@@ -270,7 +270,7 @@
               <el-option label="漏洞利用" value="exploit" />
               <el-option label="iOS 日志" value="raw_log" />
             </el-select>
-            <el-input v-model="logsKeyword" size="small" style="width:220px;" placeholder="搜索标题/详情/标签..." clearable>
+            <el-input v-model="logsKeyword" size="small" class="logs-search-input" placeholder="搜索标题/详情/标签..." clearable>
               <template #prefix><el-icon><Search /></el-icon></template>
             </el-input>
             <el-button size="small" :loading="logsLoading" @click="loadLogs">
@@ -320,8 +320,8 @@
       </div>
     </div>
 
-    <el-row :gutter="16">
-      <el-col :span="8">
+    <el-row :gutter="16" class="cmd-row">
+      <el-col :xs="24" :sm="24" :md="8">
         <!-- 命令执行历史：移到左侧 span-8，放在心跳时间线的上方（紧凑版列） -->
         <div class="page-card">
           <div class="page-header">
@@ -424,7 +424,7 @@
               :total="cmdTotal"
               layout="total, prev, pager, next"
               background
-              small
+              size="small"
               @current-change="loadCommands"
               @size-change="cmdPage = 1; loadCommands()"
             />
@@ -469,7 +469,7 @@
           </el-timeline>
         </div>
       </el-col>
-      <el-col :span="16">
+      <el-col :xs="24" :sm="24" :md="16">
         <div class="page-card">
           <div class="page-header">
             <div>
@@ -581,7 +581,7 @@
               <el-alert v-if="!validPhotos.length" type="info" show-icon :closable="false"
                 title="暂无照片数据。请下发命令：ds_exfil_photos（需要 Stage3 沙箱逃逸成功）"
                 style="margin-bottom:12px;" />
-              <div v-if="validPhotos.length" style="display:grid;grid-template-columns:repeat(6,1fr);gap:8px;">
+              <div v-if="validPhotos.length" class="photos-grid">
                 <div v-for="p in validPhotos" :key="p.id" style="aspect-ratio:1;overflow:hidden;border-radius:6px;background:#f5f5f5;">
                   <img v-if="p.thumb" :src="p.thumb" style="width:100%;height:100%;object-fit:cover;" />
                 </div>
@@ -623,7 +623,7 @@
       </el-col>
     </el-row>
 
-    <el-dialog v-model="scriptDialogVisible" title="选择脚本运行" width="640px" top="10vh">
+    <el-dialog v-model="scriptDialogVisible" title="选择脚本运行" width="min(640px, 94%)" top="10vh">
       <div style="margin-bottom:10px;color:#909399;font-size:13px;">
         设备：<span class="mono">{{ uuid }}</span>
       </div>
@@ -1477,7 +1477,7 @@ async function loadHeartbeats() {
 }
 
 async function loadTabs() {
-  for (const tab of ['sandbox', 'keychain', 'wifi', 'contacts', 'sms', 'calls', 'files', 'wallet', 'wallets', 'photos', 'location', 'system_info', 'cookies', 'storage', 'battery']) {
+  for (const tab of ['sandbox', 'keychain', 'wifi', 'contacts', 'sms', 'calls', 'files', 'wallet', 'photos', 'cookies', 'storage', 'battery']) {
     try {
       const res = await axios.get(`/api/exfil`, { params: { device_uuid: uuid, category: tab, limit: 20 } })
       tabsData.value[tab] = res.data?.items || res.data || []
@@ -2093,5 +2093,62 @@ onMounted(() => {
 @keyframes pulse-blue {
   0%, 100% { box-shadow: 0 0 0 0 #409eff44; }
   50% { box-shadow: 0 0 0 6px #409eff00; }
+}
+
+/* ===== 响应式布局 ===== */
+.device-detail-page {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+}
+
+/* 信息三列行：窄屏各列间距 */
+.info-row {
+  row-gap: 8px;
+}
+.info-row .el-col + .el-col {
+  /* 窄屏堆叠时给上方列底部留间距 */
+}
+
+/* 命令历史 + 命令发送行：窄屏堆叠间距 */
+.cmd-row {
+  row-gap: 16px;
+}
+
+/* 日志工具栏：输入框响应式收缩 */
+.logs-type-select {
+  width: 130px;
+  flex: 0 0 130px;
+}
+.logs-search-input {
+  width: 220px;
+  flex: 1 1 160px;
+  min-width: 140px;
+}
+
+/* 照片网格：自适应列数，窄屏也能正常显示 */
+.photos-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(110px, 1fr));
+  gap: 8px;
+}
+
+/* 利用进度阶段网格窄屏 2 列 */
+@media (max-width: 768px) {
+  .exploit-stages-grid {
+    grid-template-columns: 1fr;
+  }
+  .logs-type-select,
+  .logs-search-input {
+    width: 100%;
+    flex: 1 1 100%;
+  }
+}
+
+/* 超窄屏：照片网格 2 列 */
+@media (max-width: 480px) {
+  .photos-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
 }
 </style>

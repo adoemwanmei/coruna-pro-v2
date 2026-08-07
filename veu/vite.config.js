@@ -14,7 +14,7 @@ export default defineConfig({
     port: 5173,
     proxy: {
       '/api/notifications/stream': {
-        target: 'http://127.0.0.1:7000',
+        target: 'http://127.0.0.1:7001',
         changeOrigin: true,
         ws: false,
         timeout: 0,
@@ -67,7 +67,7 @@ export default defineConfig({
         }
       },
       '/api': {
-        target: 'http://127.0.0.1:7000',
+        target: 'http://127.0.0.1:7001',
         changeOrigin: true,
         ws: true,
         headers: {

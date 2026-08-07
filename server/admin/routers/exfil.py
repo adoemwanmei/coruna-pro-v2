@@ -206,6 +206,20 @@ async def list_exfil(
         except Exception:
             d["device_model"] = None
             d["device_ip"] = None
+        # 回退：data_json 为空时，读取 file_path 指向的 .bin 文件内容（sandbox 能力数据存于此）
+        if not d.get("data_json") and d.get("file_path"):
+            try:
+                resolved = _resolve_exfil_file_path(d["file_path"])
+                if resolved and os.path.isfile(resolved):
+                    with open(resolved, "r", encoding="utf-8", errors="replace") as _f:
+                        _raw = _f.read()
+                    _parsed = _json.loads(_raw)
+                    if isinstance(_parsed, dict):
+                        for _k, _v in _parsed.items():
+                            if _k not in d:
+                                d[_k] = _v
+            except Exception:
+                pass
         result.append(d)
     return {"total": total, "items": result, "skip": skip, "limit": limit}
 
@@ -273,6 +287,25 @@ def _expand_exfil_items(db, category: str, skip: int, limit: int,
                         items_data = [parsed]
             except Exception:
                 items_data = None
+        # 回退：data_json 为空时，尝试读取 file_path 指向的 .bin 文件（sandbox 能力数据存于此）
+        if not items_data and e.file_path:
+            try:
+                resolved = _resolve_exfil_file_path(e.file_path)
+                if resolved and os.path.isfile(resolved):
+                    with open(resolved, "r", encoding="utf-8", errors="replace") as _f:
+                        _raw = _f.read()
+                    _parsed = _json.loads(_raw)
+                    if isinstance(_parsed, list):
+                        items_data = _parsed
+                    elif isinstance(_parsed, dict):
+                        if isinstance(_parsed.get("items"), list):
+                            items_data = _parsed["items"]
+                        elif isinstance(_parsed.get("data"), list):
+                            items_data = _parsed["data"]
+                        else:
+                            items_data = [_parsed]
+            except Exception:
+                pass
         if not items_data:
             if extra_filters is None or _match_filters({}, extra_filters):
                 expanded.append({**base, "_idx": 0})

